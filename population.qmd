@@ -1,0 +1,4740 @@
+---
+title: "Population"
+author: "Jin Myung Kim"
+date: "2025-07-31"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    theme: flatly
+    code-fold: true
+  pdf:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+bibliography: D:/AppliedEconomics/Opium_Substitution/bibliography.bib
+---
+
+```{r}
+#| include: false
+# Environment setup
+user <- 2
+working_dirs <- c(
+  "Your coauthor's path",           
+  "D:/AppliedEconomics/Opium_Substitution/Empirical/build"
+)
+setwd(working_dirs[user])
+
+# Load Library
+library(tidyverse)
+library(sf)
+library(terra)
+library(patchwork)
+library(knitr)
+library(shiny)
+
+# Read Data
+phc_2005 <- readRDS("temp/phc_2005.rds") %>%
+  mutate(area_km2 = as.numeric(st_area(geometry)) / 1e6) 
+phc_2015 <- readRDS("temp/phc_2015.rds") %>%
+  mutate(area_km2 = as.numeric(st_area(geometry)) / 1e6) 
+phc_20052015 <- readRDS("temp/phc_20052015.rds")
+risk_2005 <- readRDS("temp/risk_2005.rds") %>% 
+  mutate(VCODE = if_else(nchar(VCODE) == 6, paste0("0", VCODE), as.character(VCODE)))
+risk_2015 <- readRDS("temp/risk_2015.rds") %>% 
+  mutate(VCODE = if_else(nchar(VCODE) == 6, paste0("0", VCODE), as.character(VCODE)))
+masked_roads <- readRDS("temp/masked_roads.rds")
+
+# WorldPop time series (2005 boundary)
+wp_2005 <- readRDS("temp/worldpop_village_2005.rds") %>% 
+  select(VCODE, starts_with("pop_")) %>% 
+  mutate(VCODE = if_else(nchar(VCODE) == 6, paste0("0", VCODE), as.character(VCODE)))
+
+# Join data
+v_2005 <- phc_2005 %>% 
+  left_join(risk_2005, by = "VCODE")
+v_2015 <- phc_2015 %>% 
+  left_join(risk_2015, by = "VCODE") %>% 
+  mutate(
+    low_elevation = factor(if_else(mean_elev <= median(mean_elev, na.rm = TRUE), 1, 0)), 
+    low_slope = factor(if_else(mean_slope <= median(mean_slope, na.rm = TRUE), 1, 0))) %>% 
+  mutate(
+    elevation_slope_group = factor(if_else(low_elevation == 0 & low_slope == 0, "High-High", if_else(low_elevation == 0 & low_slope == 1, "High-Low", if_else(low_elevation == 1 & low_slope == 0, "Low-High", "Low-Low"))))
+    )
+v_0515 <- phc_20052015 %>% 
+  left_join(risk_2015, by = "VCODE") %>% 
+  mutate(
+    low_elevation = factor(if_else(mean_elev <= median(mean_elev, na.rm = TRUE), 1, 0)), 
+    low_slope = factor(if_else(mean_slope <= median(mean_slope, na.rm = TRUE), 1, 0))) %>% 
+  mutate(
+    elevation_slope_group = factor(if_else(low_elevation == 0 & low_slope == 0, "High-High", if_else(low_elevation == 0 & low_slope == 1, "High-Low", if_else(low_elevation == 1 & low_slope == 0, "Low-High", "Low-Low"))))
+    )
+
+# Match List
+final_match <- read_csv("temp/match_list.csv") %>% 
+  filter(str_sub(vcode_2005, 1, 2) %in% c("02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "18"))
+
+# Construct Merged Panel (2005/2015)
+# 1. Merge 2005 data with match list
+matched_15 <- final_match %>%
+  left_join(phc_2015 %>% 
+              st_drop_geometry() %>% 
+              select(VCODE, 
+                     population_2015 = population, 
+                     poverty_rate_2015 = poverty_rate, 
+                     area_km2_2015 = area_km2, 
+                     average_area_per_household_2015 = average_area_per_household, 
+                     percentage_immigrant_2015 = percentage_immigrant, 
+                     percentage_emigrant_2015 = percentage_emigrant, 
+                     percentage_household_with_agricultural_land_2015 = percentage_household_with_agricultural_land
+                     ), 
+            by = c("vcode_2015" = "VCODE"))
+
+# 2. Merge 2015 data
+matched_0515 <- matched_15 %>%
+  left_join(phc_2005 %>% 
+              st_drop_geometry() %>% 
+              select(VCODE, 
+                     DCODE, 
+                     PCODE, 
+                     population_2005 = population, 
+                     poverty_rate_2005 = poverty_rate, 
+                     area_km2_2005 = area_km2, 
+                     average_area_per_household_2005 = average_area_per_household, 
+                     percentage_immigrant_2005 = percentage_immigrant, 
+                     percentage_emigrant_2005 = percentage_emigrant, 
+                     percentage_household_with_agricultural_land_2005 = percentage_household_with_agricultural_land
+                     ), 
+            by = c("vcode_2005" = "VCODE"), 
+            suffix = c("_2015", "_2005"))
+
+matched_0515 <- v_2005 %>% 
+  select(VCODE, VName) %>% 
+  inner_join(matched_0515, by = c("VCODE" = "vcode_2005")) %>% 
+  left_join(risk_2005, by = "VCODE") %>% 
+  mutate(
+    low_elevation = factor(if_else(mean_elev <= median(mean_elev, na.rm = TRUE), 1, 0)), 
+    low_slope = factor(if_else(mean_slope <= median(mean_slope, na.rm = TRUE), 1, 0))) %>% 
+  mutate(
+    elevation_slope_group = factor(if_else(low_elevation == 0 & low_slope == 0, "High-High", if_else(low_elevation == 0 & low_slope == 1, "High-Low", if_else(low_elevation == 1 & low_slope == 0, "Low-High", "Low-Low"))))
+    ) %>% 
+  mutate(c_population = population_2015 - population_2005, 
+         g_population = c_population / population_2005, 
+         temp = area_km2_2005 - area_km2_2015, 
+         c_poverty_rate = poverty_rate_2015 - poverty_rate_2005, 
+         c_percentage_immigrant = percentage_immigrant_2015 - percentage_immigrant_2005, 
+         c_percentage_emigrant = percentage_emigrant_2015 - percentage_emigrant_2005, 
+         c_percentage_household_with_agricultural_land = percentage_household_with_agricultural_land_2015 - percentage_household_with_agricultural_land_2005, 
+         c_average_area_per_household = average_area_per_household_2015 - average_area_per_household_2005, 
+         log_population_2015 = log(population_2015), 
+         log_population_2005 = log(population_2005), 
+         c_log_population = log_population_2015 - log_population_2005) %>%
+  drop_na() %>% 
+  # Left Join WorldPop Time Series
+  left_join(wp_2005, by = "VCODE")
+```
+
+# Introduction
+
+In an effort to reduce both domestic consumption and regional opium production, the Chinese government launched the Opium Replacement Program (ORP) in 2006. This initiative was designed to provide funding for Chinese companies to invest in opium-cultivating regions of Laos and Myanmar by supporting the transition of local farmers to cash crops such as rubber, maize, and sugarcane, thereby fostering broader socio-economic development in affected areas [@lu2023peripheral; @unodc2015opiumsurvey; @tni2010alternative]. Initially proposed as part of China’s broader “Going Out” strategy in the early 2000s to encourage overseas investment, the ORP was officially initiated in 2004 and subsequently formalized and expanded in 2006 when it was incorporated into China’s five-year plan with dedicated funding and policy support. Its stated aim is to replace opium cultivation in the Golden Triangle with licit, high-value cash crops, thus improving local livelihoods and promoting economic cooperation. To incentivize participation, Chinese companies involved in the program are offered tax exemptions within import quotas, along with subsidies and interest-free loans [@tni2010alternative; @cohen2009post; @lu2019tapping]. Approximately 7.2 million USD (50 million RMB) in central funding, supplemented by 4.3 million USD (30 million RMB) from provincial matching funds, was allocated to the program. Companies must manage large-scale investment projects covering over 600 hectares (10,000 mu) to qualify, and these funds support the establishment of plantations for crops such as rubber, maize, and sugarcane.
+
+Despite the policy's initial aim of nudging firms to invest directly to the opium farmers, firms had lots of autonomy throughout the investment activity. To be more specific, firms established locations where it favors firms' business operations rather than cooperate directly with opium farmers. By conducting several interviews with different stakeholders, @lu2019tapping argues that the ORP attempts ''replacement by displacement''. That is, the replacement of opium cultivation is achieved by drawing opium farmers out of opium fields by providing labor opportunities in alternative crop plantations which are often established at regions near road and with low elevation.
+
+## Experimental Design
+
+**Main Hypothesis:** The introduction of the ORP program decreased the opium cultivation by shifting labor out of opium cultivating regions.
+
+**Ideal experimental design:** Randomly pick villages and introduce ORP in some villages and leave rest of the villages as control group. 
+Then check whether villages with ORP experience population increase.
+
+**Issue:**
+
+-   Randomization: The treatment are not received randomly. Villages are treated based on whether the village is suitable for business operations (i.e. low elevation, near road, etc.). Thus, we might want to characterize locations suitable for ORP alternative crop plantation, using distance to road, slope, and elevation.
+
+**Refined Hypothesis:** Controlling for geographic accessibility and baseline opium risk, village exposed to ORP experienced a greater reduction in opium cultivation compared to similar, non-treated villages.
+
+**Mechanism:**
+
+-   First-order Impact
+
+    1.  Local laborers shift from opium cultivation to wage labor on these plantations.
+    2.  Farmers/opium farmers migrate to ORP zones for better opportunities (replacement by displacement).
+
+-   Second-order Impact
+
+    1.  Schooling and child labor: with stable ORP income, some households pull children from labor to school [@sviatschi2022making; @unodc2005opiumsurvey]
+
+ORP likely impacted population dynamics in Laos, especially through the relocation of labor from upland opium-growing areas to lowland agricultural and economic centers. We will explore such dynamics in the following section to better characterize such characteristics and check the possibility of the ''replacement by displacement'' mechanism.
+
+**Population and Housing Census.** To understand these changes, we first analyze Laos’ Population and Housing Census (2005) to establish a pre-ORP baseline. We assess how population, population density, and poverty levels relate to terrain characteristics (elevation, slope), road accessibility, and how they evolved between 2005 and 2015.
+
+**World Pop.** Then we will use WorldPop data, which is trained using machine learning technique to simulate the population distribution between 2000 and 2020. This will add additional information on the population dynamics to the Population Housing Census information which is limited to only 2005 and 2015.
+
+**ORP Program.** Then we will check whether the observed population dynamic is affected by ORP programs using official ORP records.
+
+# Population and Housing Census
+
+## Baseline Patterns in 2005 and 2015
+
+```{r}
+#| include: false
+# Prepare Data
+v_2005 <- v_2005 %>% 
+  mutate(
+    low_elevation = factor(if_else(mean_elev <= median(mean_elev, na.rm = TRUE), 1, 0)), 
+    low_slope = factor(if_else(mean_slope <= median(mean_slope, na.rm = TRUE), 1, 0))) %>% 
+  mutate(
+    elevation_slope_group = factor(if_else(low_elevation == 0 & low_slope == 0, "High-High", if_else(low_elevation == 0 & low_slope == 1, "High-Low", if_else(low_elevation == 1 & low_slope == 0, "Low-High", "Low-Low"))))
+    ) %>%
+  mutate(
+    population_quantile = cut(
+      population, breaks = quantile(population, probs = seq(0, 1, 0.2), na.rm = TRUE),
+      include.lowest = TRUE,
+      labels = c("0-20%", "20-40%", "40-60%", "60-80%", "80-100%")
+    ),
+    density_quantile = cut(
+      population_density, breaks = quantile(population_density, probs = seq(0, 1, 0.2), na.rm = TRUE),
+      include.lowest = TRUE,
+      labels = c("0–20%", "20–40%", "40–60%", "60–80%", "80–100%")
+    ),
+    poverty_quantile = cut(
+      poverty_rate, breaks = quantile(poverty_rate, probs = seq(0, 1, 0.2), na.rm = TRUE), 
+      include.lowest = TRUE, 
+      labels = c("0-20%", "20-40%", "40-60%", "60-80%", "80-100%")
+    ),
+    pop_bin_500 = cut(population, breaks = seq(0, 4000, 500), labels = paste0(seq(0, 3500, 500), "-", seq(500, 4000, 500))),
+    density_bin_250 = cut(population_density, breaks = c(0, seq(250, 2000, 250), Inf), labels = c("0-250", "250-500", "500-750", "750-1000", "1000-1250", "1250-1500", "1500-1750", "1750-2000", "2000+")),
+    elevation_bin_250 = cut(mean_elev, breaks = seq(0, 2000, 250), labels = paste(seq(0, 1750, 250), seq(250, 2000, 250), sep = "-")),
+    elevation_bin_500 = cut(mean_elev, breaks = seq(0, 2000, 500), labels = paste(seq(0, 1500, 500), seq(500, 2000, 500), sep = "-"))
+  ) %>% 
+  mutate(risk_2000 = factor(if_else(op2000_count > 0, 1, 0))) %>% 
+  # High Slope Dummy
+  mutate(slope = factor(if_else(mean_slope >= 10, 1, 0), levels = c(0, 1), labels = c("Low Slope", "High Slope"))) %>% 
+  # High Elevation Dummy
+  mutate(elevation = factor(if_else(mean_elev >= 700, 1, 0), levels = c(0, 1), labels = c("Low Elevation", "High Elevation"))) %>% 
+  # Historical Cultivation Near-by Dummy 
+  mutate(opium_2000 = factor(if_else(op2000_count > 0, 1, 0), levels = c(0, 1), labels = c("No Cultivation Observed", "Cultivation Observed"))) %>% 
+  mutate(combine_2000 = factor(if_else(elevation == "High Elevation" & slope == "High Slope" & opium_2000 == "Cultivation Observed", 1, 0), levels = c(0, 1), labels = c("Non-Risk Area", "Risk Area")))
+
+table(v_2005$low_elevation, v_2005$low_slope)
+
+# compute village centroids
+v_centroids <- st_centroid(v_2005)
+```
+
+-   **Population and density were higher in accessible, low-elevation/slope areas**
+
+    -   Villages located at lower elevations, with gentler slopes, and closer to national or provincial roads had significantly higher population and population density. Among these characteristics, slope showed the strongest negative association, followed by elevation and road distance.
+
+    -   *Slope, elevation, and distance to road should be treated as core baseline covariates.*
+
+```{r}
+#| message: false
+#| warning: false
+# Fit linear model
+model_slope <- lm(log(population) ~ mean_slope, data = v_2005)
+summary_slope <- summary(model_slope)
+
+# Extract values
+coef_slope <- summary_slope$coefficients["mean_slope", "Estimate"]
+se_slope   <- summary_slope$coefficients["mean_slope", "Std. Error"]
+r2_slope   <- summary_slope$r.squared
+
+# Format label
+label_slope <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_slope, se_slope, r2_slope)
+
+# Plot
+p1 <- ggplot(v_2005, aes(x = mean_slope, y = log(population))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_slope, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Slope and Population",
+    x = "Mean Slope (°)",
+    y = "Log Population"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_elev <- lm(log(population) ~ mean_elev, data = v_2005)
+summary_elev <- summary(model_elev)
+
+# Extract values
+coef_elev <- summary_elev$coefficients["mean_elev", "Estimate"]
+se_elev   <- summary_elev$coefficients["mean_elev", "Std. Error"]
+r2_elev   <- summary_elev$r.squared
+
+# Format label
+label_elev <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_elev, se_elev, r2_elev)
+
+# Plot
+p2 <- ggplot(v_2005, aes(x = mean_elev, y = log(population))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_elev, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Elevation and opulation",
+    x = "Mean Elevation (m)",
+    y = "Log Population"
+  ) + 
+  theme_bw()
+
+# Fit linear model with log-transformed mean_dist
+model_log_dist <- lm(log(population) ~ log(mean_dist), data = v_2005)
+summary_log_dist <- summary(model_log_dist)
+
+# Extract values
+coef_log_dist <- summary_log_dist$coefficients["log(mean_dist)", "Estimate"]
+se_log_dist   <- summary_log_dist$coefficients["log(mean_dist)", "Std. Error"]
+r2_log_dist   <- summary_log_dist$r.squared
+
+# Format annotation label
+label_log_dist <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_log_dist, se_log_dist, r2_log_dist)
+
+# Plot
+p3 <- ggplot(data = v_2005, aes(x = log(mean_dist), y = log(population))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_log_dist, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Distance to Road and Population",
+    x = "Log Mean Distance to Road (m)",
+    y = "Log Population"
+  ) + 
+  theme_bw()
+
+# Fit linear model
+model_slope <- lm(log(population_density) ~ mean_slope, data = v_2005)
+summary_slope <- summary(model_slope)
+
+# Extract values
+coef_slope <- summary_slope$coefficients["mean_slope", "Estimate"]
+se_slope   <- summary_slope$coefficients["mean_slope", "Std. Error"]
+r2_slope   <- summary_slope$r.squared
+
+# Format label
+label_slope <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_slope, se_slope, r2_slope)
+
+# Plot
+p4 <- ggplot(v_2005, aes(x = mean_slope, y = log(population_density))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_slope, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Slope and Population Density",
+    x = "Mean Slope (°)",
+    y = "Log Population Density"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_elev <- lm(log(population_density) ~ mean_elev, data = v_2005)
+summary_elev <- summary(model_elev)
+
+# Extract values
+coef_elev <- summary_elev$coefficients["mean_elev", "Estimate"]
+se_elev   <- summary_elev$coefficients["mean_elev", "Std. Error"]
+r2_elev   <- summary_elev$r.squared
+
+# Format label
+label_elev <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_elev, se_elev, r2_elev)
+
+# Plot
+p5 <- ggplot(v_2005, aes(x = mean_elev, y = log(population_density))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_elev, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Elevation and Population Density",
+    x = "Mean Elevation (m)",
+    y = "Log Population Density"
+  ) + 
+  theme_bw()
+
+# Fit linear model with log-transformed mean_dist
+model_log_dist <- lm(log(population_density) ~ log(mean_dist), data = v_2005)
+summary_log_dist <- summary(model_log_dist)
+
+# Extract values
+coef_log_dist <- summary_log_dist$coefficients["log(mean_dist)", "Estimate"]
+se_log_dist   <- summary_log_dist$coefficients["log(mean_dist)", "Std. Error"]
+r2_log_dist   <- summary_log_dist$r.squared
+
+# Format annotation label
+label_log_dist <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_log_dist, se_log_dist, r2_log_dist)
+
+# Plot
+p6 <- ggplot(data = v_2005, aes(x = log(mean_dist), y = log(population_density))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_log_dist, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Distance to Road and Population Density",
+    x = "Log Mean Distance to Road (m)",
+    y = "Log Population Density"
+  ) + 
+  theme_bw()
+
+(p1 + p2 + p3) / (p4 + p5 + p6)
+```
+
+```{r}
+#| echo: false
+p1 <- ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(population_quantile %in% c("80-100%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(subtitle = "Villages at 80-100% population quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+
+p2 <- ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(density_quantile %in% c("80–100%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(subtitle = "Villages at 80-100% population density quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+
+# Suppress legend and subtitle in p2
+p2_clean <- p2 +
+  theme(legend.position = "none") 
+
+# Combine with shared title and legend
+(p1 + p2_clean) +
+  plot_layout(guides = "collect") &
+  plot_annotation(
+    title = "Elevation-Slope Group Map (2005)",
+    subtitle = "Elevation cutoff 702.63m, Slope cutoff 31°"
+  ) &
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| eval: false
+#| include: false
+p1 <- ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(population_quantile %in% c("60-80%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(subtitle = "Villages at 60-80% population quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+
+p2 <- ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(density_quantile %in% c("60–80%")),
+          color = "black", size = 0.3, alpha = 0.8) + 
+  labs(subtitle = "Villages at 60-80% population density quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+
+# Suppress legend and subtitle in p2
+p2_clean <- p2 +
+  theme(legend.position = "none") 
+
+# Combine with shared title and legend
+(p1 + p2_clean) +
+  plot_layout(guides = "collect") &
+  plot_annotation(
+    title = "Elevation-Slope Group Map (2005)",
+    subtitle = "Elevation cutoff 702.63m, Slope cutoff 31°"
+  ) &
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| eval: false
+#| include: false
+p1 <- ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(population_quantile %in% c("40-60%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(subtitle = "Villages at 40-60% population quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+
+p2 <- ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(density_quantile %in% c("40–60%")),
+          color = "black", size = 0.3, alpha = 0.8) + 
+  labs(subtitle = "Villages at 40–60% population density quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+
+# Suppress legend and subtitle in p2
+p2_clean <- p2 +
+  theme(legend.position = "none") 
+
+# Combine with shared title and legend
+(p1 + p2_clean) +
+  plot_layout(guides = "collect") &
+  plot_annotation(
+    title = "Elevation-Slope Group Map (2005)",
+    subtitle = "Elevation cutoff 702.63m, Slope cutoff 31°"
+  ) &
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| eval: false
+#| include: false
+p1 <- ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(population_quantile %in% c("20-40%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(subtitle = "Villages at 20-40% population quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+
+p2 <- ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(density_quantile %in% c("20–40%")),
+          color = "black", size = 0.3, alpha = 0.8) + 
+  labs(subtitle = "Villages at 20–40% population density quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+
+# Suppress legend and subtitle in p2
+p2_clean <- p2 +
+  theme(legend.position = "none") 
+
+# Combine with shared title and legend
+(p1 + p2_clean) +
+  plot_layout(guides = "collect") &
+  plot_annotation(
+    title = "Elevation-Slope Group Map (2005)",
+    subtitle = "Elevation cutoff 702.63m, Slope cutoff 31°"
+  ) &
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| echo: false
+p1 <- ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(population_quantile %in% c("0-20%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(subtitle = "Villages at 0-20% population quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+
+p2 <- ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(density_quantile %in% c("0–20%")),
+          color = "black", size = 0.3, alpha = 0.8) + 
+  labs(subtitle = "Villages at 0–20% population density quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+
+# Suppress legend and subtitle in p2
+p2_clean <- p2 +
+  theme(legend.position = "none") 
+
+# Combine with shared title and legend
+(p1 + p2_clean) +
+  plot_layout(guides = "collect") &
+  plot_annotation(
+    title = "Elevation-Slope Group Map (2005)",
+    subtitle = "Elevation cutoff 702.63m, Slope cutoff 31°"
+  ) &
+  theme(legend.position = "bottom")
+```
+
+In order to simultaneously consider the relationship between population and population density with elevation and slope, we categorized the villages in Northern Laos by following classification:
+
+-   Slope: ''High Slope Village'' if the average slope of the village is greater than 31 (median average slope) and "Low Slope Village" otherwise.
+
+-   Elevation: ''High Elevation Village'' if the average mean of the village is greater than 702.63 meter and ''Low Elevation Village'' otherwise.
+
+According to @drug1992opium and @unodc2001opiumsurvey opium poppy cultivation are known to thrive in elevation above 700 meters and slope between 20 to 40 degree. This coincides with the above classification.
+
+Note: Figures above did not considered distance to road since there is a strong correlation between distance to road and slope/elevation.
+
+```{r}
+#| message: false
+#| warning: false
+# Fit linear model
+model_slope <- lm(log(mean_dist) ~ mean_slope, data = v_2005)
+summary_slope <- summary(model_slope)
+
+# Extract values
+coef_slope <- summary_slope$coefficients["mean_slope", "Estimate"]
+se_slope   <- summary_slope$coefficients["mean_slope", "Std. Error"]
+r2_slope   <- summary_slope$r.squared
+
+# Format label
+label_slope <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_slope, se_slope, r2_slope)
+
+# Plot
+p1 <- ggplot(v_2005, aes(x = mean_slope, y = log(mean_dist))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_slope, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Slope and Distance to Road",
+    x = "Mean Slope (°)",
+    y = "Log Distance to Road (m)"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_elev <- lm(log(mean_dist) ~ mean_elev, data = v_2005)
+summary_elev <- summary(model_elev)
+
+# Extract values
+coef_elev <- summary_elev$coefficients["mean_elev", "Estimate"]
+se_elev   <- summary_elev$coefficients["mean_elev", "Std. Error"]
+r2_elev   <- summary_elev$r.squared
+
+# Format label
+label_elev <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_elev, se_elev, r2_elev)
+
+# Plot
+p2 <- ggplot(v_2005, aes(x = mean_elev, y = log(mean_dist))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_elev, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Elevation and Distance to Road",
+    x = "Mean Elevation (m)",
+    y = "Log Distance to Road (m)"
+  ) + 
+  theme_bw()
+
+p1 + p2
+```
+
+```{r}
+#| echo: false
+# Create summary table
+table_density_elevslope <- v_2005 %>%
+  st_drop_geometry() %>% 
+  count(elevation_slope_group, density_quantile) %>%
+  tidyr::pivot_wider(
+    names_from = density_quantile,
+    values_from = n,
+    values_fill = 0
+  )
+
+table_density_elevslope %>%
+  kable(
+    format = "html",  # or "latex" if rendering PDF
+    caption = "Number of Villages by Elevation-Slope Group and Population Density Quantile",
+    align = "c"
+  )
+```
+
+```{r}
+#| echo: false
+# Create summary table
+table_population_elevslope <- v_2005 %>%
+  st_drop_geometry() %>% 
+  count(elevation_slope_group, population_quantile) %>%
+  tidyr::pivot_wider(
+    names_from = population_quantile,
+    values_from = n,
+    values_fill = 0
+  )
+
+# View the table
+table_population_elevslope %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Number of Villages by Elevation-Slope Group and Population Quantile",
+    align = "c"
+  )
+```
+
+```{r}
+#| echo: false
+ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(risk_2000 == 1),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(title = "Elevation-Slope Group Map (2005)", 
+       subtitle = "Cutoff set to median elevation (702.63m) and median slope (31 degree)
+       \nBlack Dots: villages cultivating opium in 2000") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+```
+
+```{r}
+#| echo: false
+elev_slope_opium_cultivation_summary <- v_2005 %>%
+  st_drop_geometry() %>%
+  group_by(elevation_slope_group) %>%
+  summarise(
+    n_opium_v     = sum(risk_2000 == 1, na.rm = TRUE),
+    n_no_opium_v  = sum(risk_2000 == 0, na.rm = TRUE),
+    total_v       = n()
+  ) %>%
+  mutate(
+    perc_opium     = round(n_opium_v    / total_v, 2),
+    perc_no_opium  = round(n_no_opium_v / total_v, 2)
+  ) %>%
+  ungroup()
+
+# View Table
+elev_slope_opium_cultivation_summary %>%
+  kable(
+    format = "html",  # Use "latex" if rendering PDF
+    caption = "Summary of Opium Cultivation by Elevation-Slope Group",
+    align = "c"
+  )
+```
+
+From above Elevation-Slope Maps and Tables above, we observe that villages with higher population/population density tend to be located at low-elevation and low-slope region. In contrast, villages with lower population/population density tend to be located at high-elevation and high-slope villages. We also observe that village that have opium cultivation risk tend to be in high-elevation and high-slope region since the median elevation and median slope coincides with the topographic condition suitable for opium cultivation.
+
+```{r}
+#| echo: false
+ggplot() + 
+  geom_sf(data = v_2005, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(poverty_quantile %in% c("80-100%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(title = "Elevation-Slope Group Map (2005)", 
+       subtitle = "Cutoff set to median elevation (702.63m) and median slope (31 degree)
+       \nVillages at 80-100% Poverty Rate Quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+```
+
+```{r}
+#| echo: false
+# Create summary table
+table_poverty_elevslope <- v_2005 %>%
+  st_drop_geometry() %>% 
+  count(elevation_slope_group, poverty_quantile) %>%
+  tidyr::pivot_wider(
+    names_from = poverty_quantile,
+    values_from = n,
+    values_fill = 0
+  )
+
+# View the table
+table_poverty_elevslope %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Number of Villages by Elevation-Slope Group and Poverty Rate Quantile",
+    align = "c"
+  )
+```
+
+It can also been observed that villages with higher poverty rate tend to be in high-elevation and high-slope regions while villages with lower porverty rate tend to be in low-elevation and low-slope regions.
+
+### Summary
+
+**Topographic characteristics (elevation and slope) are associated with both demographic concentration, baseline exposure to opium poppy cultivation, and poverty.**
+
+Similar analysis using 2015 Population and Housing Census yields similar conclusion.
+
+## Patterns of Change (2005-2015)
+
+-   **Villages in low elevation, flat terrain, and near roads experienced more change (both increase and decrease)**
+
+    -   Both increases and decreases in population density were concentrated in accessible areas.
+
+    -   *Suggests that there areas were more exposed to demographic activity*
+
+```{r}
+#| include: false
+v_0515 <- v_0515 %>% 
+  mutate(abs_change = abs(c_population_density), 
+         abs_change_log = log(abs_change)) %>% 
+  mutate(
+    change_quantile = ntile(c_population_density, 5), 
+    change_quantile = factor(
+      change_quantile, 
+      labels = c("0–20%", "20–40%", "40–60%", "60–80%", "80–100%")
+      ),
+    abs_change_quantile = ntile(abs_change, 5),
+    abs_change_quantile = factor(
+      abs_change_quantile,
+      labels = c("0–20%", "20–40%", "40–60%", "60–80%", "80–100%")
+    )
+  ) %>% 
+  mutate(
+    low_elevation = factor(if_else(mean_elev <= median(mean_elev, na.rm = TRUE), 1, 0)), 
+    low_slope = factor(if_else(mean_slope <= median(mean_slope, na.rm = TRUE), 1, 0))) %>% 
+  mutate(
+    elevation_slope_group = factor(if_else(low_elevation == 0 & low_slope == 0, "High-High", if_else(low_elevation == 0 & low_slope == 1, "High-Low", if_else(low_elevation == 1 & low_slope == 0, "Low-High", "Low-Low"))))
+    ) %>% 
+  mutate(c_density_binary = factor(if_else(c_population_density >= 0, "Increase", "Decrease")))
+
+v_centroids <- st_centroid(v_0515)
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+# Fit linear model
+model_slope <- lm(abs_change_log ~ mean_slope, data = v_0515 %>% filter(is.finite(abs_change_log)))
+summary_slope <- summary(model_slope)
+
+# Extract values
+coef_slope <- summary_slope$coefficients["mean_slope", "Estimate"]
+se_slope   <- summary_slope$coefficients["mean_slope", "Std. Error"]
+r2_slope   <- summary_slope$r.squared
+
+# Format label
+label_slope <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_slope, se_slope, r2_slope)
+
+# Plot
+p1 <- ggplot(v_0515, aes(x = mean_slope, y = abs_change_log)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_slope, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Slope and abs_change_log",
+    x = "Mean Slope (°)",
+    y = "Log Absolute Change"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_elev <- lm(abs_change_log ~ mean_elev, data = v_0515 %>% filter(is.finite(abs_change_log)))
+summary_elev <- summary(model_elev)
+
+# Extract values
+coef_elev <- summary_elev$coefficients["mean_elev", "Estimate"]
+se_elev   <- summary_elev$coefficients["mean_elev", "Std. Error"]
+r2_elev   <- summary_elev$r.squared
+
+# Format label
+label_elev <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_elev, se_elev, r2_elev)
+
+# Plot
+p2 <- ggplot(v_0515, aes(x = mean_elev, y = abs_change_log)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_elev, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Elevation and abs_change_log",
+    x = "Mean Elevation (m)",
+    y = "Log Absolute Change"
+  ) + 
+  theme_bw()
+
+# Fit linear model with log-transformed mean_dist
+model_log_dist <- lm(abs_change_log ~ log(mean_dist), data = v_0515 %>% filter(is.finite(abs_change_log)))
+summary_log_dist <- summary(model_log_dist)
+
+# Extract values
+coef_log_dist <- summary_log_dist$coefficients["log(mean_dist)", "Estimate"]
+se_log_dist   <- summary_log_dist$coefficients["log(mean_dist)", "Std. Error"]
+r2_log_dist   <- summary_log_dist$r.squared
+
+# Format annotation label
+label_log_dist <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_log_dist, se_log_dist, r2_log_dist)
+
+# Plot
+p3 <- ggplot(v_0515 %>% filter(is.finite(abs_change_log), is.finite(mean_dist)),
+       aes(x = log(mean_dist), y = abs_change_log)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_log_dist, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Log Distance to Road and abs_change_log",
+    x = "Log Mean Distance to Road (m)",
+    y = "Log Absolute Change"
+  ) + 
+  theme_bw()
+
+p1 + p2 + p3
+```
+
+```{r}
+temp <- matched_0515 %>% 
+  mutate(pop_change = (pop_2010 - pop_2001) / pop_2001)
+
+# Fit linear model
+model_slope <- lm(pop_change ~ mean_slope, data = temp)
+summary_slope <- summary(model_slope)
+
+# Extract values
+coef_slope <- summary_slope$coefficients["mean_slope", "Estimate"]
+se_slope   <- summary_slope$coefficients["mean_slope", "Std. Error"]
+r2_slope   <- summary_slope$r.squared
+
+# Format label
+label_slope <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_slope, se_slope, r2_slope)
+
+# Plot
+p1 <- ggplot(temp, aes(x = mean_slope, y = pop_change)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_slope, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Slope and pop_change",
+    x = "Mean Slope (°)",
+    y = "pop_change"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_elev <- lm(pop_change ~ mean_elev, data = temp)
+summary_elev <- summary(model_elev)
+
+# Extract values
+coef_elev <- summary_elev$coefficients["mean_elev", "Estimate"]
+se_elev   <- summary_elev$coefficients["mean_elev", "Std. Error"]
+r2_elev   <- summary_elev$r.squared
+
+# Format label
+label_elev <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_elev, se_elev, r2_elev)
+
+# Plot
+p2 <- ggplot(temp, aes(x = mean_elev, y = pop_change)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_elev, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Elevation and pop_change",
+    x = "Mean Elevation (m)",
+    y = "pop_change"
+  ) + 
+  theme_bw()
+
+# Fit linear model with log-transformed mean_dist
+model_log_dist <- lm(pop_change ~ log(mean_dist), data = temp)
+summary_log_dist <- summary(model_log_dist)
+
+# Extract values
+coef_log_dist <- summary_log_dist$coefficients["log(mean_dist)", "Estimate"]
+se_log_dist   <- summary_log_dist$coefficients["log(mean_dist)", "Std. Error"]
+r2_log_dist   <- summary_log_dist$r.squared
+
+# Format annotation label
+label_log_dist <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_log_dist, se_log_dist, r2_log_dist)
+
+# Plot
+p3 <- ggplot(temp,
+       aes(x = log(mean_dist), y = pop_change)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_log_dist, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Log Distance to Road and pop_change",
+    x = "Log Mean Distance to Road (m)",
+    y = "pop_change"
+  ) + 
+  theme_bw()
+
+p1 + p2 + p3
+```
+
+```{r}
+temp <- matched_0515 %>% 
+  mutate(pop_change = abs((pop_2010 - pop_2001) / pop_2001))
+
+# Fit linear model
+model_slope <- lm(pop_change ~ mean_slope, data = temp)
+summary_slope <- summary(model_slope)
+
+# Extract values
+coef_slope <- summary_slope$coefficients["mean_slope", "Estimate"]
+se_slope   <- summary_slope$coefficients["mean_slope", "Std. Error"]
+r2_slope   <- summary_slope$r.squared
+
+# Format label
+label_slope <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_slope, se_slope, r2_slope)
+
+# Plot
+p1 <- ggplot(temp, aes(x = mean_slope, y = pop_change)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_slope, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Slope and pop_change",
+    x = "Mean Slope (°)",
+    y = "pop_change"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_elev <- lm(pop_change ~ mean_elev, data = temp)
+summary_elev <- summary(model_elev)
+
+# Extract values
+coef_elev <- summary_elev$coefficients["mean_elev", "Estimate"]
+se_elev   <- summary_elev$coefficients["mean_elev", "Std. Error"]
+r2_elev   <- summary_elev$r.squared
+
+# Format label
+label_elev <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_elev, se_elev, r2_elev)
+
+# Plot
+p2 <- ggplot(temp, aes(x = mean_elev, y = pop_change)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_elev, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Elevation and pop_change",
+    x = "Mean Elevation (m)",
+    y = "pop_change"
+  ) + 
+  theme_bw()
+
+# Fit linear model with log-transformed mean_dist
+model_log_dist <- lm(pop_change ~ log(mean_dist), data = temp)
+summary_log_dist <- summary(model_log_dist)
+
+# Extract values
+coef_log_dist <- summary_log_dist$coefficients["log(mean_dist)", "Estimate"]
+se_log_dist   <- summary_log_dist$coefficients["log(mean_dist)", "Std. Error"]
+r2_log_dist   <- summary_log_dist$r.squared
+
+# Format annotation label
+label_log_dist <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_log_dist, se_log_dist, r2_log_dist)
+
+# Plot
+p3 <- ggplot(temp,
+       aes(x = log(mean_dist), y = pop_change)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_log_dist, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    title = "Relationship Between Log Distance to Road and pop_change",
+    x = "Log Mean Distance to Road (m)",
+    y = "pop_change"
+  ) + 
+  theme_bw()
+
+p1 + p2 + p3
+```
+
+```{r}
+#| echo: false
+ggplot() + 
+  geom_sf(data = v_0515, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(change_quantile %in% c("80–100%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(title = "Elevation-Slope Group Map (2005)", 
+       subtitle = "Elevation cutoff 702.63m, Slope cutoff 31°
+       \nBlack Dots: villages at 80-100% population density change quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+```
+
+```{r}
+#| eval: false
+#| include: false
+ggplot() + 
+  geom_sf(data = v_0515, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(change_quantile %in% c("60–80%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(title = "Elevation-Slope Group Map (2005)", 
+       subtitle = "Elevation cutoff 702.63m, Slope cutoff 31°
+       \nBlack Dots: villages at 60-80% population density change quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+```
+
+```{r}
+#| echo: false
+ggplot() + 
+  geom_sf(data = v_0515, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(change_quantile %in% c("40–60%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(title = "Elevation-Slope Group Map (2005)", 
+       subtitle = "Elevation cutoff 702.63m, Slope cutoff 31°
+       \nBlack Dots: villages at 40–60% population density change quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+```
+
+```{r}
+#| eval: false
+#| include: false
+ggplot() + 
+  geom_sf(data = v_0515, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(change_quantile %in% c("20–40%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(title = "Elevation-Slope Group Map (2005)", 
+       subtitle = "Elevation cutoff 702.63m, Slope cutoff 31°
+       \nBlack Dots: villages at 20–40% population density change quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+```
+
+```{r}
+#| echo: false
+ggplot() + 
+  geom_sf(data = v_0515, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name   = "Elev-Slope Group",
+    values = c(
+      "High-High" = "#EF3B2C",   # both high → red
+      "High-Low"  = "#FDAE61",   # high elev only → orange
+      "Low-High"  = "#66C2A5",   # high slope only → green
+      "Low-Low"   = "#2171B5"    # both low → blue
+    )
+  ) + 
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  geom_sf(data = v_centroids %>% filter(change_quantile %in% c("0–20%")),
+          color = "black", size = 0.3, alpha = 0.8) +
+  labs(title = "Elevation-Slope Group Map (2005)", 
+       subtitle = "Elevation cutoff 702.63m, Slope cutoff 31°
+       \nBlack Dots: villages at 0–20% population density change quantile") + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+```
+
+```{r}
+#| echo: false
+# Create summary table
+table_density_change_elevslope <- v_0515 %>%
+  st_drop_geometry() %>% 
+  count(elevation_slope_group, change_quantile) %>%
+  tidyr::pivot_wider(
+    names_from = change_quantile,
+    values_from = n,
+    values_fill = 0
+  )
+
+table_density_change_elevslope %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Number of Villages by Elevation-Slope Group and Population Density Change Quantile",
+    align = "c"
+  )
+```
+
+```{r}
+#| echo: false
+ggplot(v_0515) +
+  geom_sf(aes(fill = abs_change_quantile), color = NA) +
+  scale_fill_brewer(
+    palette = "Blues",
+    direction = 1,
+    name = "Absolute Change\nin Density",
+    na.value = "grey90"
+  ) +
+  labs(
+    title = "Absolute Change in Population Density (2005–2015)",
+    x = "Longitude",
+    y = "Latitude", 
+    caption = "Data Source: Laos Population and Housing Census 2005/2015"
+  ) +
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) + 
+  theme_bw() +
+  theme(legend.justification = c(1, 1),  
+        legend.background = element_rect(fill = "white", color = "black")) 
+```
+
+-   **Population and density changes showed spatial clustering**
+
+    -   It can be observed that villages that are in the highest quantile are also surrounded by villages in lower quantile. In other words, villages that experienced higher population density increase are close to villages that experienced lower population density increase.
+
+```{r}
+#| echo: false
+table_summary_density_elevslope <- v_0515 %>%
+  st_drop_geometry() %>% 
+  group_by(change_quantile) %>% 
+  summarize(
+    mean_val = mean(c_population_density), 
+    median_val = median(c_population_density), 
+    minimum = min(c_population_density), 
+    maximum = max(c_population_density))
+
+table_summary_density_elevslope %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Summary Statistics of Population Density Change by Quantile (Census)",
+    align = "c"
+  )
+```
+
+From the above table, we can further observe that most of villages in lower 40% quantile experience decrease in population density.
+
+```{r}
+#| echo: false
+# Plot for 2005
+p1 <- ggplot(matched_0515, aes(x = elevation_slope_group, y = c_population, fill = elevation_slope_group)) + 
+  geom_boxplot(outlier.alpha = 0.3) + 
+  labs(x = NULL, y = "Change in Population") + 
+  theme_bw() + 
+  theme(legend.position = "none")
+
+# Plot for 2005
+p2 <- ggplot(matched_0515, aes(x = elevation_slope_group, y = g_population, fill = elevation_slope_group)) +
+  geom_boxplot(outlier.alpha = 0.3) +
+  labs(x = NULL, y = "Growth Rate") + 
+  theme_bw() + 
+  theme(legend.position = "none")
+
+# Suppress legend and subtitle in p2
+p2_clean <- p2 +
+  theme(legend.position = "none") 
+
+# Combine with shared title and legend
+(p1 + p2_clean) +
+  plot_layout(guides = "collect") &
+  plot_annotation(
+    title = "Population Change Elevation-Slope Group Map (2005)"
+  ) &
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| echo: false
+table_summary_population_elevslope <- matched_0515 %>%
+  st_drop_geometry() %>% 
+  group_by(elevation_slope_group) %>% 
+  summarize(
+    mean_c_population = mean(c_population), 
+    median_c_population = median(c_population), 
+    sd_c_population = sd(c_population), 
+    mean_g_population = mean(g_population), 
+    median_g_population = median(g_population), 
+    sd_g_population = sd(g_population), 
+    n = n()
+    )
+
+table_summary_population_elevslope %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Summary Statistics of Population Change by Elevation Slope Group (Census Matched)",
+    align = "c"
+  )
+```
+
+Using matched Population and Housing Census dataset, we can observe villages in low-low elevation-slope group experience higher population change and higher population growth rate compared to other elevation-slope group.
+
+```{r}
+#| echo: false
+# Pivot population columns to long format
+pop_long <- matched_0515 %>%
+  select(elevation_slope_group, starts_with("pop_")) %>%
+  pivot_longer(
+    cols = starts_with("pop_"),
+    names_to = "year",
+    names_prefix = "pop_",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.integer(year))
+
+# Calculate mean and standard error
+pop_summary <- pop_long %>%
+  group_by(year, elevation_slope_group) %>%
+  summarise(
+    mean_population = mean(population, na.rm = TRUE),
+    se_population   = sd(population, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    lower = mean_population - 1.96 * se_population,
+    upper = mean_population + 1.96 * se_population
+  )
+
+# Plot with ribbon and vertical line
+ggplot(pop_summary, aes(x = year, y = mean_population, color = elevation_slope_group, fill = elevation_slope_group)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black", linewidth = 0.8) +
+  labs(
+    title = "Mean Village Population (2000–2020) by Elevation-Slope Group",
+    x = "Year",
+    y = "Mean Population",
+    color = "Elevation-Slope Group",
+    fill  = "Elevation-Slope Group"
+  ) +
+  theme_bw()
+```
+
+```{r}
+#| echo: false
+# Extract year columns
+pop_years <- names(matched_0515)[grepl("^pop_\\d{4}$", names(matched_0515))]
+
+# Reshape to long format
+pop_long <- matched_0515 %>%
+  select(VCODE, elevation_slope_group, all_of(pop_years)) %>%
+  pivot_longer(
+    cols = all_of(pop_years),
+    names_to = "year",
+    names_prefix = "pop_",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.integer(year)) %>%
+  arrange(VCODE, year)
+
+# Calculate growth rate for each village
+pop_long <- pop_long %>%
+  group_by(VCODE) %>%
+  arrange(year, .by_group = TRUE) %>%
+  mutate(growth_rate = (population - lag(population)) / lag(population)) %>%
+  ungroup()
+
+growth_summary <- pop_long %>%
+  filter(!is.na(growth_rate)) %>%
+  group_by(year, elevation_slope_group) %>%
+  summarise(
+    mean_growth = mean(growth_rate, na.rm = TRUE),
+    se_growth   = sd(growth_rate, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    lower = mean_growth - 1.96 * se_growth,
+    upper = mean_growth + 1.96 * se_growth
+  )
+
+ggplot(growth_summary, aes(x = year, y = mean_growth, color = elevation_slope_group, fill = elevation_slope_group)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black", linewidth = 0.8) +
+  labs(
+    title = "Annual Population Growth Rate (2001–2020) by Elevation-Slope Group",
+    x = "Year",
+    y = "Mean Growth Rate",
+    color = "Elevation-Slope Group",
+    fill  = "Elevation-Slope Group"
+  ) +
+  theme_bw()
+```
+
+Using WorldPop Population Count data, we can also observe that low-low elevation-slope group have both higher population and population growth rate compared to high-high group.
+
+### Summary
+
+**We can conclude that topographic conditions (in our case elevation and slope) correlate with population dynamics (or how population change). While there is a ''linear'' relationship between population distribution and topographic characteristics, population dynamic differ across elevation-slope group class before and after intervention. To be more specific, low-low elevation-slope group class might have more drastic population change (both increase and decrease) while others might face less drastic change.**
+
+# Risk Area and Population
+
+We pointed out that topographic conditions might have different population distribution and population dynamics. To be more specific, we've seen that regions with elevation below 700 m AND slope lower than 30° tend to have more population and higher population growth. Note that the topographic cutoff (700 m elevation and 30° slope) are selected without any specific criteria but coincided with topographic condition suitable for opium poppy cultivation. In this section, we further manipulate this cutoff based on our definition of risk area and see whether risk area has different population distribution and dynamic (population growth) compared to non-risk area.
+
+When determining the factors that determines the risk level of a region, we consider three factors: 
+
+a.  Regions with elevation between 700 \~ 2000 meters [@unodc2001opiumsurvey];
+b.  Regions with Slope between 20° to 40° [@drug1992opium];
+c.  Regions with recorded opium cultivation nearby during 2000 nation wide opium survey [@unodc2000opiumsurvey]
+
+We first define the risk level based on topographic conditions that are suitable for opium cultivation according to previous studies [@unodc2001opiumsurvey; @unodc1950opiumturkey]. Opium poppies are generally grown at high elevations (700 m to 2000 m). At these altitudes, the temperatures are moderate, avoiding extremes of heat or cold that could harm the plant. Additionally, these regions often have well-draining soils and sufficient sunlight—both essential for healthy growth. The altitude also reduces humidity, limiting fungal diseases and pests. These conditions help maximize alkaloid production, which is key for opium yield. Such altitudes may also align with traditional farming practices and local knowledge conducive to opium cultivation. A slope between 20° and 40° is considered suitable for proper rainwater drainage [@drug1992opium].
+
+Next, we define an additional risk level based on historical patterns of opium cultivation, incorporating both spatial and topographic dimensions. Specifically, we identify areas where opium cultivation was observed in the past (in the year 2000) using @unodc2000opiumsurvey, and intersect these areas with regions that meet the topographic criteria discussed above, namely elevations between 700 m and 2000 m and slopes between 20° and 40°. This combined approach captures not only environmental suitability but also the persistence of cultivation practices rooted in local knowledge, infrastructure, and socio-economic conditions. By integrating historical cultivation data with biophysical risk factors, we aim to more accurately delineate areas at high risk for continued or renewed opium production.
+
+Raster cells (100*100 meter spatial resoultion) that matches the above condition are considered as risk cell. Risk level for each village/district/province are computed using the following formula:
+
+$$ 
+\textrm{Risk Level} = \frac{(\textrm{# of Risk Cell} \times 100 \times 100) / 1000000}{\textrm{Area of Village/District/Province in Square Kilometer}}
+$$
+
+Risk Level we defined using the above formula represents that percentage of total area of village/district/province that is vulnerable to opium poppy cultivation based on topographic suitability and historical cultivation. 
+
+We also define a binary variable based on continuous risk level variable that we defined above by setting a threshold in which the region is considered as risk area if the risk level exceeded certain threshold. (Is it necessary?)
+
+```{r}
+#| include: false
+
+# Set Threshold
+risk_threshold <- 0.06145
+risk_topo_threshold <- 0.37951
+
+# Data Preparation
+matched_0515 <- matched_0515 %>% 
+  mutate(
+    risk_elev = factor(if_else(mean_elev >= 700 & mean_elev <= 2000, "Risk Area", "Non-Risk Area")), 
+    risk_slope = factor(if_else(mean_slope >= 20 & mean_slope <= 40, "Risk Area", "Non-Risk Area")), 
+    risk_op3km = factor(if_else(op2000_count_3km > 0, "Risk Area", "Non-Risk Area")), 
+    risk_op5km = factor(if_else(op2000_count > 0, "Risk Area", "Non-Risk Area")), 
+    risk_op10km = factor(if_else(op2000_count_10km > 0, "Risk Area", "Non-Risk Area")), 
+    risk_topo = factor(if_else(risk_elev == "Risk Area" & risk_slope == "Risk Area", "Risk Area", "Non-Risk Area")), 
+    risk_topo_op3km = factor(if_else(risk_topo == "Risk Area" & risk_op3km == "Risk Area", "Risk Area", "Non-Risk Area")), 
+    risk_topo_op5km = factor(if_else(risk_topo == "Risk Area" & risk_op5km == "Risk Area", "Risk Area", "Non-Risk Area")), 
+    risk_topo_op10km = factor(if_else(risk_topo == "Risk Area" & risk_op10km == "Risk Area", "Risk Area", "Non-Risk Area"))
+    ) %>% 
+  # Use coherent risk definition: area of risky cell / area of village
+  mutate(risk_level = ((opium_area_2000 * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_3km = ((opium_area_2000_3km * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_10km = ((opium_area_2000_10km * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_binary = factor(if_else(risk_level > risk_threshold, "Risk", "Non-Risk")), 
+         risk_binary_3km = factor(if_else(risk_level_3km > risk_threshold, "Risk", "Non-Risk")), 
+         risk_binary_10km = factor(if_else(risk_level_10km > risk_threshold, "Risk", "Non-Risk")), 
+         risk_level_topo = ((terrain_suitable_cells * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_elev = ((elev_suitable_cells * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_slope = ((slope_suitable_cells * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_binary_topo = factor(if_else(risk_level > risk_topo_threshold, "Risk", "Non-Risk")))
+
+# District-level summary
+matched_0515_district <- matched_0515 %>% 
+  group_by(DCODE) %>% 
+  summarize(
+    population_2005 = sum(population_2005, na.rm = TRUE), 
+    population_2015 = sum(population_2015, na.rm = TRUE), 
+    pop_2000 = sum(pop_2000, na.rm = TRUE), 
+    pop_2001 = sum(pop_2001, na.rm = TRUE), 
+    pop_2002 = sum(pop_2002, na.rm = TRUE), 
+    pop_2003 = sum(pop_2003, na.rm = TRUE), 
+    pop_2004 = sum(pop_2004, na.rm = TRUE), 
+    pop_2005 = sum(pop_2005, na.rm = TRUE), 
+    pop_2006 = sum(pop_2006, na.rm = TRUE), 
+    pop_2007 = sum(pop_2007, na.rm = TRUE), 
+    pop_2008 = sum(pop_2008, na.rm = TRUE), 
+    pop_2009 = sum(pop_2009, na.rm = TRUE),
+    pop_2010 = sum(pop_2010, na.rm = TRUE), 
+    pop_2011 = sum(pop_2011, na.rm = TRUE), 
+    pop_2012 = sum(pop_2012, na.rm = TRUE), 
+    pop_2013 = sum(pop_2013, na.rm = TRUE), 
+    pop_2014 = sum(pop_2014, na.rm = TRUE), 
+    pop_2015 = sum(pop_2015, na.rm = TRUE), 
+    pop_2016 = sum(pop_2016, na.rm = TRUE), 
+    pop_2017 = sum(pop_2017, na.rm = TRUE), 
+    pop_2018 = sum(pop_2018, na.rm = TRUE), 
+    pop_2019 = sum(pop_2019, na.rm = TRUE), 
+    pop_2020 = sum(pop_2020, na.rm = TRUE), 
+    n_village = n(),
+    n_risk_village = sum(risk_topo_op5km == "Risk Area", na.rm = TRUE),
+    risk_village_perc = 100 * n_risk_village / n_village, 
+    area_km2_2005 = sum(area_km2_2005), 
+    opium_area_2000 = sum(opium_area_2000), 
+    opium_area_2000_3km = sum(opium_area_2000_3km), 
+    opium_area_2000_10km = sum(opium_area_2000_10km), 
+    elev_suitable_cells = sum(elev_suitable_cells), 
+    slope_suitable_cells = sum(slope_suitable_cells), 
+    terrain_suitable_cells = sum(terrain_suitable_cells), 
+  ) %>% 
+  mutate(c_population = population_2015 - population_2005, 
+         g_population = c_population / population_2005, 
+         risk_level = ((opium_area_2000 * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_3km = ((opium_area_2000_3km * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_10km = ((opium_area_2000_10km * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_binary = factor(if_else(risk_level > risk_threshold, "Risk", "Non-Risk")), 
+         risk_binary_3km = factor(if_else(risk_level_3km > risk_threshold, "Risk", "Non-Risk")), 
+         risk_binary_10km = factor(if_else(risk_level_10km > risk_threshold, "Risk", "Non-Risk")), 
+         risk_level_topo = ((terrain_suitable_cells * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_elev = ((elev_suitable_cells * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_slope = ((slope_suitable_cells * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_binary_topo = factor(if_else(risk_level > risk_topo_threshold, "Risk", "Non-Risk")), 
+         log_population_2015 = log(population_2015), 
+         log_population_2005 = log(population_2005), 
+         c_log_population = log_population_2015 - log_population_2005)
+
+# Province-level summary
+matched_0515_province <- matched_0515 %>% 
+  group_by(PCODE) %>% 
+  summarize(
+    population_2005 = sum(population_2005, na.rm = TRUE), 
+    population_2015 = sum(population_2015, na.rm = TRUE), 
+    pop_2000 = sum(pop_2000, na.rm = TRUE), 
+    pop_2001 = sum(pop_2001, na.rm = TRUE), 
+    pop_2002 = sum(pop_2002, na.rm = TRUE), 
+    pop_2003 = sum(pop_2003, na.rm = TRUE), 
+    pop_2004 = sum(pop_2004, na.rm = TRUE), 
+    pop_2005 = sum(pop_2005, na.rm = TRUE), 
+    pop_2006 = sum(pop_2006, na.rm = TRUE), 
+    pop_2007 = sum(pop_2007, na.rm = TRUE), 
+    pop_2008 = sum(pop_2008, na.rm = TRUE), 
+    pop_2009 = sum(pop_2009, na.rm = TRUE),
+    pop_2010 = sum(pop_2010, na.rm = TRUE), 
+    pop_2011 = sum(pop_2011, na.rm = TRUE), 
+    pop_2012 = sum(pop_2012, na.rm = TRUE), 
+    pop_2013 = sum(pop_2013, na.rm = TRUE), 
+    pop_2014 = sum(pop_2014, na.rm = TRUE), 
+    pop_2015 = sum(pop_2015, na.rm = TRUE), 
+    pop_2016 = sum(pop_2016, na.rm = TRUE), 
+    pop_2017 = sum(pop_2017, na.rm = TRUE), 
+    pop_2018 = sum(pop_2018, na.rm = TRUE), 
+    pop_2019 = sum(pop_2019, na.rm = TRUE), 
+    pop_2020 = sum(pop_2020, na.rm = TRUE), 
+    n_village = n(),
+    n_risk_village = sum(risk_topo_op5km == "Risk Area", na.rm = TRUE),
+    risk_village_perc = 100 * n_risk_village / n_village, 
+    area_km2_2005 = sum(area_km2_2005), 
+    opium_area_2000 = sum(opium_area_2000), 
+    opium_area_2000_3km = sum(opium_area_2000_3km), 
+    opium_area_2000_10km = sum(opium_area_2000_10km), 
+    elev_suitable_cells = sum(elev_suitable_cells), 
+    slope_suitable_cells = sum(slope_suitable_cells), 
+    terrain_suitable_cells = sum(terrain_suitable_cells)
+  ) %>% 
+  mutate(c_population = population_2015 - population_2005, 
+         g_population = c_population / population_2005, 
+         risk_level = ((opium_area_2000 * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_3km = ((opium_area_2000_3km * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_10km = ((opium_area_2000_10km * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_binary = factor(if_else(risk_level > risk_threshold, "Risk", "Non-Risk")), 
+         risk_binary_3km = factor(if_else(risk_level_3km > risk_threshold, "Risk", "Non-Risk")), 
+         risk_binary_10km = factor(if_else(risk_level_10km > risk_threshold, "Risk", "Non-Risk")), 
+         risk_level_topo = ((terrain_suitable_cells * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_elev = ((elev_suitable_cells * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_level_slope = ((slope_suitable_cells * 100 * 100) / 1000000) / area_km2_2005, 
+         risk_binary_topo = factor(if_else(risk_level > risk_topo_threshold, "Risk", "Non-Risk")), 
+         log_population_2015 = log(population_2015), 
+         log_population_2005 = log(population_2005), 
+         c_log_population = log_population_2015 - log_population_2005)
+
+```
+
+
+```{r}
+#| echo: false
+# Create p1: Topographic Risk Level
+p1 <- ggplot(matched_0515, aes(x = risk_level_topo)) + 
+  geom_histogram(binwidth = 0.1, fill = "steelblue", color = "black") +
+  labs(title = "Topographic Risk Level", x = "Risk Level", y = "Count") +
+  theme_minimal() +
+  annotate("text", x = 0.5, y = Inf, vjust = 2, hjust = 0,
+           label = "Min: 0.00\nQ1: 0.013\nMedian: 0.38\nMean: 0.40\nQ3: 0.74\nMax: 0.99",
+           size = 3.5)
+
+# Create p2: Combined Risk Level
+p2 <- ggplot(matched_0515, aes(x = risk_level)) + 
+  geom_histogram(binwidth = 0.1, fill = "darkorange", color = "black") +
+  labs(title = "Combined Risk Level", x = "Risk Level", y = "Count") +
+  theme_minimal() +
+  annotate("text", x = 0.5, y = Inf, vjust = 2, hjust = 0,
+           label = "Min: 0.00\nQ1: 0.00\nMedian: 0.06\nMean: 0.27\nQ3: 0.57\nMax: 0.97",
+           size = 3.5)
+
+# Combine into a 1x2 layout
+p1 + p2
+```
+
+
+We attempt to answer following questions:
+
+1.  Does villages in risk area experience different population growth compared to villages not in risk area? Do villages with higher risk level experience different population growth compared to villages with lower risk level?
+2.  What is the relationship between risk area and establishment of ORP program?
+3.  Does villages in risk area AND higher exposure to ORP experience different population growth compared to villages in risk area but has lower exposure to ORP?
+
+
+## Population Growth Comparison by Risk Level
+
+In this section, we will compare the population growth between risk area and non-risk area at village/district/province level, using two types of risk level that we defined above. 
+We will compare the population dynamics using both continuous measure and binary measure of risk level.  
+
+### Village Level Population Growth Comparison
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(c_population ~ risk_level, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515, aes(x = risk_level, y = c_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "Village Risk Level",
+    y = "Population Change"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_1 <- lm(c_population ~ risk_binary, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515, aes(x = risk_binary, y = c_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("Village Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Population Change"
+  ) +
+  coord_cartesian(ylim = c(-1000, 1000)) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Village Risk Level and Population Change",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(c_population ~ risk_level_topo, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515, aes(x = risk_level_topo, y = c_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "Village Risk Level",
+    y = "Population Change"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_1 <- lm(c_population ~ risk_binary_topo, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515, aes(x = risk_binary_topo, y = c_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("Village Risk Level (Binary: Threshold = %.2f)", risk_topo_threshold),
+    y = "Population Change"
+  ) +
+  coord_cartesian(ylim = c(-1000, 1000)) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Village Risk Level (Topographic) and Population Change",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+As show in the above figure, we can see that there's a negative correlation between village population change and village risk level. 
+This indicates that villages with higher opium cultivation risk level tend to experience lower or even negative population change. 
+
+```{r}
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_level, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515, aes(x = risk_level, y = c_log_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "Village Risk Level",
+    y = "log Population Change"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_binary, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515, aes(x = risk_binary, y = c_log_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("Village Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "log Population Change"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Village Risk Level and log Population Change",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_level_topo, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515, aes(x = risk_level_topo, y = c_log_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "Village Risk Level",
+    y = "log Population Change"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_binary_topo, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515, aes(x = risk_binary_topo, y = c_log_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("Village Risk Level (Binary: Threshold = %.2f)", risk_topo_threshold),
+    y = "log Population Change"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Village Risk Level and log Population Change (Topographic)",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+
+As show in the above figure, we can see that there's a negative correlation between village population change (calculated using difference of natural logarithm) of population and village risk level. 
+Similar to what we've shown above, this indicates that villages with higher opium cultivation risk level tend to experience lower or even negative population change.
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(g_population ~ risk_level, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515, aes(x = risk_level, y = g_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "Village Risk Level",
+    y = "Population Growth Rate"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_1 <- lm(g_population ~ risk_binary, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515, aes(x = risk_binary, y = g_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("Village Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Population Growth Rate"
+  ) +
+  coord_cartesian(ylim = c(-1, 1)) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Village Risk Level and Population Growth Rate",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(g_population ~ risk_level_topo, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515, aes(x = risk_level_topo, y = g_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "Village Risk Level",
+    y = "Population Growth Rate"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_1 <- lm(g_population ~ risk_binary_topo, data = matched_0515)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515, aes(x = risk_binary_topo, y = g_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("Village Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Population Growth Rate"
+  ) +
+  coord_cartesian(ylim = c(-1, 1)) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Village Risk Level and Population Growth Rate (Topographic)",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+
+As show in the above figure, we can see that there's a negative correlation between village population growth rate and village risk level. 
+This indicates that villages with higher opium cultivation risk level tend to have lower population growth rate.
+
+```{r}
+#| echo: false
+# Step 1: Extract population columns
+pop_years <- names(matched_0515)[grepl("^pop_\\d{4}$", names(matched_0515))]
+
+# Step 2: Convert to long format with risk_binary
+pop_long <- matched_0515 %>%
+  select(VCODE, risk_binary, risk_binary_topo, all_of(pop_years)) %>%
+  pivot_longer(
+    cols = all_of(pop_years),
+    names_to = "year",
+    names_prefix = "pop_",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.integer(year))
+
+# Step 3: Summarize mean population by year and risk group
+pop_summary <- pop_long %>%
+  group_by(year, risk_binary) %>%
+  summarise(
+    mean_population = mean(population, na.rm = TRUE),
+    se = sd(population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_population - 1.96 * se,
+    upper = mean_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+pop_summary_topo <- pop_long %>%
+  group_by(year, risk_binary_topo) %>%
+  summarise(
+    mean_population = mean(population, na.rm = TRUE),
+    se = sd(population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_population - 1.96 * se,
+    upper = mean_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Step 4: Plot
+p1 <- ggplot(pop_summary, aes(x = year, y = mean_population, color = risk_binary, fill = risk_binary)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Village Population",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_threshold), 
+    x = "Year",
+    y = "Mean Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+p2 <- ggplot(pop_summary_topo, aes(x = year, y = mean_population, color = risk_binary_topo, fill = risk_binary_topo)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Village Population (Topographic)",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_topo_threshold), 
+    x = "Year",
+    y = "Mean Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+```
+
+Above plot shows the trend of mean population of villages in Non-risk v.s. Risk groups over the period of 2000 to 2020. Both groups experienced increase in population. Although not obvious, we observe the gap of mean population between two groups have increased over the period. 
+
+```{r}
+#| echo: false
+# Step 1: Extract population columns
+pop_years <- names(matched_0515)[grepl("^pop_\\d{4}$", names(matched_0515))]
+
+# Step 2: Convert to long format and compute log(population)
+pop_long <- matched_0515 %>%
+  select(VCODE, risk_binary, risk_binary_topo, all_of(pop_years)) %>%
+  pivot_longer(
+    cols = all_of(pop_years),
+    names_to = "year",
+    names_prefix = "pop_",
+    values_to = "population"
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    log_population = log(population)
+  )
+
+# Step 3: Summarize mean log-population by year and risk group
+pop_summary <- pop_long %>%
+  group_by(year, risk_binary) %>%
+  summarise(
+    mean_log_population = mean(log_population, na.rm = TRUE),
+    se = sd(log_population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_log_population - 1.96 * se,
+    upper = mean_log_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+pop_summary_topo <- pop_long %>%
+  group_by(year, risk_binary_topo) %>%
+  summarise(
+    mean_log_population = mean(log_population, na.rm = TRUE),
+    se = sd(log_population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_log_population - 1.96 * se,
+    upper = mean_log_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Step 4: Plot
+p1 <- ggplot(pop_summary, aes(x = year, y = mean_log_population, color = risk_binary, fill = risk_binary)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Annual Mean Log Population",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_threshold), 
+    x = "Year",
+    y = "Mean Log Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+p2 <- ggplot(pop_summary_topo, aes(x = year, y = mean_log_population, color = risk_binary_topo, fill = risk_binary_topo)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Annual Mean Log Population (Topographic)",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_topo_threshold), 
+    x = "Year",
+    y = "Mean Log Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+```
+
+We observe a similar trend as above when using natural logarithm of population. 
+
+```{r}
+#| echo: false
+pop_years <- names(matched_0515)[grepl("^pop_\\d{4}$", names(matched_0515))]
+
+pop_long <- matched_0515 %>%
+  select(VCODE, DCODE, PCODE, risk_level, risk_binary, risk_binary_topo, all_of(pop_years)) %>%
+  pivot_longer(
+    cols = all_of(pop_years),
+    names_to = "year",
+    names_prefix = "pop_",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.integer(year)) %>%
+  arrange(VCODE, year)
+
+# Step 2: Calculate year-to-year growth by village
+pop_growth <- pop_long %>%
+  group_by(VCODE) %>%
+  arrange(year) %>%
+  mutate(growth = (population - lag(population)) / lag(population)) %>%
+  ungroup()
+
+# Step 3: Summarize growth rate by year and binary risk group
+growth_summary <- pop_growth %>%
+  filter(!is.na(growth)) %>%
+  group_by(year, risk_binary) %>%
+  summarise(
+    mean_growth = mean(growth, na.rm = TRUE),
+    se = sd(growth, na.rm = TRUE) / sqrt(n()),
+    lower = mean_growth - 1.96 * se,
+    upper = mean_growth + 1.96 * se,
+    .groups = "drop"
+  )
+
+growth_summary_topo <- pop_growth %>%
+  filter(!is.na(growth)) %>%
+  group_by(year, risk_binary_topo) %>%
+  summarise(
+    mean_growth = mean(growth, na.rm = TRUE),
+    se = sd(growth, na.rm = TRUE) / sqrt(n()),
+    lower = mean_growth - 1.96 * se,
+    upper = mean_growth + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Step 4: Plot
+p1 <- ggplot(growth_summary, aes(x = year, y = mean_growth, color = risk_binary, fill = risk_binary)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Population Growth",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_threshold), 
+    x = "Year",
+    y = "Growth Rate",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+p2 <- ggplot(growth_summary_topo, aes(x = year, y = mean_growth, color = risk_binary_topo, fill = risk_binary_topo)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Population Growth (Topographic)",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_topo_threshold), 
+    x = "Year",
+    y = "Growth Rate",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+```
+
+The annual population growth rates, computed from WorldPop data, indicate a declining gap between Risk and Non-Risk villages after 2006. 
+
+
+### District Level Population Growth Comparison
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(c_population ~ risk_level, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_district, aes(x = risk_level, y = c_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "District Risk Level",
+    y = "Population Change"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(c_population ~ risk_binary, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_district, aes(x = risk_binary, y = c_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("District Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Population Change"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "District Risk Level and Population Change",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(c_population ~ risk_level_topo, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_district, aes(x = risk_level_topo, y = c_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "District Risk Level",
+    y = "Population Change"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(c_population ~ risk_binary_topo, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_district, aes(x = risk_binary_topo, y = c_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("District Risk Level (Binary: Threshold = %.2f)", risk_topo_threshold),
+    y = "Population Change"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "District Risk Level and Population Change (Topographic)",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_level, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_district, aes(x = risk_level, y = c_log_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "District Risk Level",
+    y = "Log Population Change"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_binary, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_district, aes(x = risk_binary, y = c_log_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("District Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Log Population Change"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "District Risk Level and Log Population Change",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_level_topo, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_district, aes(x = risk_level_topo, y = c_log_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "District Risk Level",
+    y = "Log Population Change"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_binary_topo, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_district, aes(x = risk_binary_topo, y = c_log_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("District Risk Level (Binary: Threshold = %.2f)", risk_topo_threshold),
+    y = "Log Population Change"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "District Risk Level and Log Population Change (Topographic)",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(g_population ~ risk_level, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_district, aes(x = risk_level, y = g_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "District Risk Level",
+    y = "Population Growth Rate"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(g_population ~ risk_binary, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_district, aes(x = risk_binary, y = g_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("District Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Population Growth Rate"
+  ) +
+  coord_cartesian(ylim = c(-1, 1)) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "District Risk Level and Population Growth Rate",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(g_population ~ risk_level_topo, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_district, aes(x = risk_level_topo, y = g_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "District Risk Level",
+    y = "Population Growth Rate"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(g_population ~ risk_binary_topo, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_district, aes(x = risk_binary_topo, y = g_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("District Risk Level (Binary: Threshold = %.2f)", risk_topo_threshold),
+    y = "Population Growth Rate"
+  ) +
+  coord_cartesian(ylim = c(-1, 1)) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "District Risk Level and Population Growth Rate (Topographic)",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+At the district level, it becomes more obvious (indicated by steeper negative slope) that district with higher risk level tend to have lower population growth rate.
+
+```{r}
+#| echo: false
+# Step 1: Extract population columns
+pop_years <- names(matched_0515)[grepl("^pop_\\d{4}$", names(matched_0515))]
+
+# Step 2: Convert to long format with risk_binary
+pop_long <- matched_0515_district %>%
+  select(DCODE, risk_binary, risk_binary_topo, all_of(pop_years)) %>%
+  pivot_longer(
+    cols = all_of(pop_years),
+    names_to = "year",
+    names_prefix = "pop_",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.integer(year))
+
+# Step 3: Summarize mean population by year and risk group
+pop_summary <- pop_long %>%
+  group_by(year, risk_binary) %>%
+  summarise(
+    mean_population = mean(population, na.rm = TRUE),
+    se = sd(population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_population - 1.96 * se,
+    upper = mean_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+pop_summary_topo <- pop_long %>%
+  group_by(year, risk_binary_topo) %>%
+  summarise(
+    mean_population = mean(population, na.rm = TRUE),
+    se = sd(population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_population - 1.96 * se,
+    upper = mean_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Step 4: Plot
+p1 <- ggplot(pop_summary, aes(x = year, y = mean_population, color = risk_binary, fill = risk_binary)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean District Population",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_threshold), 
+    x = "Year",
+    y = "Mean Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+p2 <- ggplot(pop_summary_topo, aes(x = year, y = mean_population, color = risk_binary_topo, fill = risk_binary_topo)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean District Population (Topographic)",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_topo_threshold), 
+    x = "Year",
+    y = "Mean Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| echo: false
+# Step 1: Extract population columns
+pop_years <- names(matched_0515)[grepl("^pop_\\d{4}$", names(matched_0515))]
+
+# Step 2: Convert to long format and compute log(population)
+pop_long <- matched_0515_district %>%
+  select(DCODE, risk_binary, risk_binary_topo, all_of(pop_years)) %>%
+  pivot_longer(
+    cols = all_of(pop_years),
+    names_to = "year",
+    names_prefix = "pop_",
+    values_to = "population"
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    log_population = log(population)
+  )
+
+# Step 3: Summarize mean log-population by year and risk group
+pop_summary <- pop_long %>%
+  group_by(year, risk_binary) %>%
+  summarise(
+    mean_log_population = mean(log_population, na.rm = TRUE),
+    se = sd(log_population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_log_population - 1.96 * se,
+    upper = mean_log_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+pop_summary_topo <- pop_long %>%
+  group_by(year, risk_binary_topo) %>%
+  summarise(
+    mean_log_population = mean(log_population, na.rm = TRUE),
+    se = sd(log_population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_log_population - 1.96 * se,
+    upper = mean_log_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Step 4: Plot
+p1 <- ggplot(pop_summary, aes(x = year, y = mean_log_population, color = risk_binary, fill = risk_binary)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean District Log Population",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_threshold), 
+    x = "Year",
+    y = "Mean Log Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+p2 <- ggplot(pop_summary_topo, aes(x = year, y = mean_log_population, color = risk_binary_topo, fill = risk_binary_topo)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean District Log Population (Topographic)",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_topo_threshold), 
+    x = "Year",
+    y = "Mean Log Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+```
+
+
+```{r}
+#| echo: false
+# Step 1: Reshape data (already done above)
+pop_years <- names(matched_0515)[grepl("^pop_\\d{4}$", names(matched_0515))]
+
+pop_long <- matched_0515 %>%
+  select(VCODE, DCODE, PCODE, risk_binary, risk_binary_topo, all_of(pop_years)) %>%
+  pivot_longer(
+    cols = all_of(pop_years),
+    names_to = "year",
+    names_prefix = "pop_",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.integer(year)) %>%
+  arrange(VCODE, year)
+
+# Step 2: Calculate year-to-year growth rate by village
+pop_growth <- pop_long %>%
+  group_by(VCODE) %>%
+  arrange(year) %>%
+  mutate(growth = (population - lag(population)) / lag(population)) %>%
+  ungroup()
+
+# Step 3: Calculate district-level average growth by year and risk group
+district_growth <- pop_growth %>%
+  filter(!is.na(growth)) %>%
+  group_by(DCODE, year, risk_binary) %>%
+  summarise(
+    district_growth = mean(growth, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+district_growth_topo <- pop_growth %>%
+  filter(!is.na(growth)) %>%
+  group_by(DCODE, year, risk_binary_topo) %>%
+  summarise(
+    district_growth = mean(growth, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Step 4: Summarize across districts by risk group
+district_growth_summary <- district_growth %>%
+  group_by(year, risk_binary) %>%
+  summarise(
+    mean_growth = mean(district_growth, na.rm = TRUE),
+    se = sd(district_growth, na.rm = TRUE) / sqrt(n()),
+    lower = mean_growth - 1.96 * se,
+    upper = mean_growth + 1.96 * se,
+    .groups = "drop"
+  )
+
+district_growth_summary_topo <- district_growth_topo %>%
+  group_by(year, risk_binary_topo) %>%
+  summarise(
+    mean_growth = mean(district_growth, na.rm = TRUE),
+    se = sd(district_growth, na.rm = TRUE) / sqrt(n()),
+    lower = mean_growth - 1.96 * se,
+    upper = mean_growth + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Step 5: Plot
+p1 <- ggplot(district_growth_summary, aes(x = year, y = mean_growth, color = risk_binary, fill = risk_binary)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Population Growth Rate by District",
+    subtitle = sprintf("Binary Risk Group (Threshold = %.2f)", risk_threshold),
+    x = "Year",
+    y = "Mean Growth Rate (District Average)",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+p2 <- ggplot(district_growth_summary_topo, aes(x = year, y = mean_growth, color = risk_binary_topo, fill = risk_binary_topo)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Population Growth Rate by District (Topo)",
+    subtitle = sprintf("Binary Risk Group (Threshold = %.2f)", risk_topo_threshold),
+    x = "Year",
+    y = "Mean Growth Rate (District Average)",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+```
+
+
+### Province Level Population Growth Comparison
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(c_population ~ risk_level, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_province, aes(x = risk_level, y = c_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 3) +
+  labs(
+    x = "Province Risk Level",
+    y = "Population Change"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(c_population ~ risk_binary, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_province, aes(x = risk_binary, y = c_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 3) +
+  labs(
+    x = sprintf("Province Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Population Change"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Province Risk Level and Population Change",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(c_population ~ risk_level_topo, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_province, aes(x = risk_level_topo, y = c_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 3) +
+  labs(
+    x = "Province Risk Level",
+    y = "Population Change"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(c_population ~ risk_binary_topo, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_province, aes(x = risk_binary_topo, y = c_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 3) +
+  labs(
+    x = sprintf("Province Risk Level (Binary: Threshold = %.2f)", risk_topo_threshold),
+    y = "Population Change"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Province Risk Level and Population Change (Topographic)",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_level, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_province, aes(x = risk_level, y = c_log_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 3) +
+  labs(
+    x = "Province Risk Level",
+    y = "Log Population Change"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_binary, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_province, aes(x = risk_binary, y = c_log_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 3) +
+  labs(
+    x = sprintf("Province Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Log Population Change"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Province Risk Level and Log Population Change",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_level_topo, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_province, aes(x = risk_level_topo, y = c_log_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 3) +
+  labs(
+    x = "Province Risk Level",
+    y = "Log Population Change"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(c_log_population ~ risk_binary_topo, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_province, aes(x = risk_binary_topo, y = c_log_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 3) +
+  labs(
+    x = sprintf("Province Risk Level (Binary: Threshold = %.2f)", risk_topo_threshold),
+    y = "Log Population Change"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Province Risk Level and Log Population Change (Topographoc)",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(g_population ~ risk_level, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_province, aes(x = risk_level, y = g_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "Province Risk Level",
+    y = "Population Growth Rate"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(g_population ~ risk_binary, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_province, aes(x = risk_binary, y = g_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("Province Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Population Growth Rate"
+  ) +
+  coord_cartesian(ylim = c(-1, 1)) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Province Risk Level and Population Growth Rate",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(g_population ~ risk_level_topo, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_province, aes(x = risk_level_topo, y = g_population)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "Province Risk Level",
+    y = "Population Growth Rate"
+  ) +
+  theme_bw()
+
+
+# Fit linear model
+model_1 <- lm(g_population ~ risk_binary_topo, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_province, aes(x = risk_binary_topo, y = g_population)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("Province Risk Level (Binary: Threshold = %.2f)", risk_topo_threshold),
+    y = "Population Growth Rate"
+  ) +
+  coord_cartesian(ylim = c(-1, 1)) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Province Risk Level and Population Growth Rate (Topographic)",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+At the province level, it becomes more obvious (indicated by steeper negative slope) that province with higher risk level tend to have lower population growth rate.
+
+```{r}
+#| echo: false
+# Step 1: Extract population columns
+pop_years <- names(matched_0515)[grepl("^pop_\\d{4}$", names(matched_0515))]
+
+# Step 2: Convert to long format with risk_binary
+pop_long <- matched_0515_province %>%
+  select(PCODE, risk_binary, risk_binary_topo, all_of(pop_years)) %>%
+  pivot_longer(
+    cols = all_of(pop_years),
+    names_to = "year",
+    names_prefix = "pop_",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.integer(year))
+
+# Step 3: Summarize mean population by year and risk group
+pop_summary <- pop_long %>%
+  group_by(year, risk_binary) %>%
+  summarise(
+    mean_population = mean(population, na.rm = TRUE),
+    se = sd(population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_population - 1.96 * se,
+    upper = mean_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+pop_summary_topo <- pop_long %>%
+  group_by(year, risk_binary_topo) %>%
+  summarise(
+    mean_population = mean(population, na.rm = TRUE),
+    se = sd(population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_population - 1.96 * se,
+    upper = mean_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Step 4: Plot
+p1 <- ggplot(pop_summary, aes(x = year, y = mean_population, color = risk_binary, fill = risk_binary)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Province Population",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_threshold), 
+    x = "Year",
+    y = "Mean Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+p2 <- ggplot(pop_summary_topo, aes(x = year, y = mean_population, color = risk_binary_topo, fill = risk_binary_topo)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Province Population (Topographic)",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_topo_threshold), 
+    x = "Year",
+    y = "Mean Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| echo: false
+# Step 1: Extract population columns
+pop_years <- names(matched_0515)[grepl("^pop_\\d{4}$", names(matched_0515))]
+
+# Step 2: Convert to long format and compute log(population)
+pop_long <- matched_0515_province %>%
+  select(PCODE, risk_binary, risk_binary_topo, all_of(pop_years)) %>%
+  pivot_longer(
+    cols = all_of(pop_years),
+    names_to = "year",
+    names_prefix = "pop_",
+    values_to = "population"
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    log_population = log(population)
+  )
+
+# Step 3: Summarize mean log-population by year and risk group
+pop_summary <- pop_long %>%
+  group_by(year, risk_binary) %>%
+  summarise(
+    mean_log_population = mean(log_population, na.rm = TRUE),
+    se = sd(log_population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_log_population - 1.96 * se,
+    upper = mean_log_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+pop_summary_topo <- pop_long %>%
+  group_by(year, risk_binary_topo) %>%
+  summarise(
+    mean_log_population = mean(log_population, na.rm = TRUE),
+    se = sd(log_population, na.rm = TRUE) / sqrt(n()),
+    lower = mean_log_population - 1.96 * se,
+    upper = mean_log_population + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Step 4: Plot
+p1 <- ggplot(pop_summary, aes(x = year, y = mean_log_population, color = risk_binary, fill = risk_binary)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Province Log Population",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_threshold), 
+    x = "Year",
+    y = "Mean Log Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+p2 <- ggplot(pop_summary_topo, aes(x = year, y = mean_log_population, color = risk_binary_topo, fill = risk_binary_topo)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Province Log Population (Topographic)",
+    subtitle = sprintf("Binary Variable Threshold = %.2f", risk_topo_threshold), 
+    x = "Year",
+    y = "Mean Log Population",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+
+```
+
+
+```{r}
+#| echo: false
+# Step 1: Already reshaped pop_long and computed pop_growth above
+
+# Step 2: Calculate province-level average growth by year and risk group
+province_growth <- pop_growth %>%
+  filter(!is.na(growth)) %>%
+  group_by(PCODE, year, risk_binary) %>%
+  summarise(
+    province_growth = mean(growth, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+province_growth_topo <- pop_growth %>%
+  filter(!is.na(growth)) %>%
+  group_by(PCODE, year, risk_binary_topo) %>%
+  summarise(
+    province_growth = mean(growth, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Step 3: Summarize across provinces by risk group
+province_growth_summary <- province_growth %>%
+  group_by(year, risk_binary) %>%
+  summarise(
+    mean_growth = mean(province_growth, na.rm = TRUE),
+    se = sd(province_growth, na.rm = TRUE) / sqrt(n()),
+    lower = mean_growth - 1.96 * se,
+    upper = mean_growth + 1.96 * se,
+    .groups = "drop"
+  )
+
+province_growth_summary_topo <- province_growth_topo %>%
+  group_by(year, risk_binary_topo) %>%
+  summarise(
+    mean_growth = mean(province_growth, na.rm = TRUE),
+    se = sd(province_growth, na.rm = TRUE) / sqrt(n()),
+    lower = mean_growth - 1.96 * se,
+    upper = mean_growth + 1.96 * se,
+    .groups = "drop"
+  )
+
+# Step 4: Plot
+p1 <- ggplot(province_growth_summary, aes(x = year, y = mean_growth, color = risk_binary, fill = risk_binary)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Population Growth Rate by Province",
+    subtitle = sprintf("Binary Risk Group (Threshold = %.2f)", risk_threshold),
+    x = "Year",
+    y = "Mean Growth Rate (Province Average)",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+p2 <- ggplot(province_growth_summary_topo, aes(x = year, y = mean_growth, color = risk_binary_topo, fill = risk_binary_topo)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2, color = NA) +
+  geom_line(size = 1) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_vline(xintercept = 2006, linetype = "dashed", color = "black") +
+  labs(
+    title = "Mean Population Growth Rate by Province (Topographic)",
+    subtitle = sprintf("Binary Risk Group (Threshold = %.2f)", risk_topo_threshold),
+    x = "Year",
+    y = "Mean Growth Rate (Province Average)",
+    color = "Risk Group",
+    fill = "Risk Group"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom")
+```
+
+# Risk Area and ORP
+
+In this section, we check whether ORP programs are established where the opium cultivation risk is higher as the purpose of ORP suggest by using official ORP records (district/province level) and risk level variable we constructed above. 
+
+```{r}
+#| include: false
+# Data Preparation
+user <- 2
+working_dirs <- c(
+  "Your coauthor's path",           
+  "D:/AppliedEconomics/Opium_Substitution/Empirical/build"
+)
+setwd(working_dirs[user])
+
+# Load ORP record data
+library(readxl)
+orp_record <- read_xls("input/orp_record.xls")
+
+# Load province and district data (2015 boundary)
+prov <- st_read("input/2015_Lao_adm1", "2015_Lao_adm1") %>% filter(pcode %in% c(1:11, 18))
+dist <- st_read("input/2015_Lao_adm2", "2015_LAO_adm2") %>% filter(pcode %in% c(1:11, 18))
+
+# Load National Road and Provincial Road layers
+national_road <- st_read("input/road_Laos", "data") %>%
+  filter(CLSID == 100)
+provincial_road <- st_read("input/road_Laos", "data") %>%
+  filter(CLSID == 200)
+
+# Ensure all layers are in the same CRS
+national_road <- st_transform(national_road, crs = st_crs(dist))
+provincial_road <- st_transform(provincial_road, crs = st_crs(dist))
+
+# Clip road layers to Lao_adm3 boundaries
+national_road_clipped <- st_intersection(national_road, dist)
+provincial_road_clipped <- st_intersection(provincial_road, dist)
+
+# Calculate province level orp projects
+orp_province <- orp_record %>% 
+  group_by(pcode) %>% 
+  summarize(count = n())
+province_project <- sum(orp_province$count)
+prov_orp <- prov %>% 
+  left_join(orp_province, by = "pcode")
+
+# Calculate district level orp projects
+orp_district <- orp_record %>% 
+  filter(!is.na(dcode)) %>% 
+  group_by(dcode) %>% 
+  summarize(count = n())
+district_project <- sum(orp_district$count)
+dist_orp <- dist %>% 
+  left_join(orp_district, by = "dcode")
+
+# Join
+matched_0515_district <- matched_0515_district %>% 
+  left_join(orp_district, by = c("DCODE" = "dcode")) %>% 
+  mutate(count = if_else(is.na(count), 0, count))
+matched_0515_province <- matched_0515_province %>% 
+  left_join(orp_province, by = c("PCODE" = "pcode")) %>% 
+  mutate(count = if_else(is.na(count), 0, count))
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(count ~ risk_level, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_district, aes(x = risk_level, y = count)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "District Risk Level",
+    y = "Number of ORP Programs within District"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_1 <- lm(count ~ risk_binary, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_district, aes(x = risk_binary, y = count)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("District Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Number of ORP programs within District"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "District Risk Level and Number of ORP Programs",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(count ~ risk_level_topo, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_district, aes(x = risk_level_topo, y = count)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "District Risk Level",
+    y = "Number of ORP Programs within District"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_1 <- lm(count ~ risk_binary_topo, data = matched_0515_district)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_district, aes(x = risk_binary_topo, y = count)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("District Risk Level (Binary: Threshold = %.2f)", risk_topo_threshold),
+    y = "Number of ORP programs within District"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "District Risk Level and Number of ORP Programs (Topographic)",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+
+As shown in the figure above, we can see that there's a positive correlation between number of ORP program within the district and district's risk level, indicating that number of ORP tend to be high where districts are suitable for opium cultivation or historically cultivated opium poppy. 
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(count ~ risk_level, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_province, aes(x = risk_level, y = count)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "Province Risk Level",
+    y = "Number of ORP Programs within Province"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_1 <- lm(count ~ risk_binary, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binaryRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binaryRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_province, aes(x = risk_binary, y = count)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("Province Risk Level (Binary: Threshold = %.2f)", risk_threshold),
+    y = "Number of ORP programs within Province"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Province Risk Level and Number of ORP Programs",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+```{r}
+#| echo: false
+# Fit linear model
+model_1 <- lm(count ~ risk_level_topo, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_level_topo", "Estimate"]
+se_1   <- summary_1$coefficients["risk_level_topo", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p1 <- ggplot(matched_0515_province, aes(x = risk_level_topo, y = count)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "blue", se = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = "Province Risk Level",
+    y = "Number of ORP Programs within Province"
+  ) +
+  theme_bw()
+
+# Fit linear model
+model_1 <- lm(count ~ risk_binary_topo, data = matched_0515_province)
+summary_1 <- summary(model_1)
+
+# Extract values
+coef_1 <- summary_1$coefficients["risk_binary_topoRisk", "Estimate"]
+se_1   <- summary_1$coefficients["risk_binary_topoRisk", "Std. Error"]
+r2_1   <- summary_1$r.squared
+
+# Format label
+label_1 <- sprintf("β = %.3f (SE = %.3f)\nR² = %.3f", coef_1, se_1, r2_1)
+
+# Plot
+p2 <- ggplot(matched_0515_province, aes(x = risk_binary_topo, y = count)) +
+  geom_boxplot() +
+  annotate("text", x = Inf, y = Inf, label = label_1, hjust = 1.1, vjust = 1.5, size = 5) +
+  labs(
+    x = sprintf("Province Risk Level (Binary: Threshold = %.2f)", risk_topo_threshold),
+    y = "Number of ORP programs within Province"
+  ) +
+  theme_bw()
+
+(p1 + p2) + 
+  plot_annotation(
+    title = "Province Risk Level and Number of ORP Programs (Topographic)",
+    theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+  )
+```
+
+
+At the province level, there seems to be positive correlation between province risk level and number of ORP programs within province. 
+However, the relationship is not statistically significant.
+
+## Regression
+
+In this section, we formally test whether the population changes observed between risk and non-risk villages after the introduction of the Opium Replacement Program (ORP) are statistically significant. We use a Difference-in-Differences (DiD) approach, progressively incorporating year trends and fixed effects to account for time-varying shocks and unobserved heterogeneity at the district and province levels. This framework allows us to isolate the differential post-ORP population dynamics of villages historically at risk of opium cultivation relative to those that were not.
+
+
+We estimate the following baseline model:
+
+$$
+Y_{vdt} = \alpha + \beta (Post_t \times Risk_v) + \gamma Post_t + \delta Risk_v + \theta X_{vdt} + \mu_d + \lambda_t + \varepsilon_{vdt}
+$$
+
+Where:  
+- $Y_{vdt}$ = Outcome variable (population or log-population) for village $v$ in district $d$ at time $t$  
+- $Post_t$ = Indicator for post-ORP period (1 if year ≥ 2006, 0 otherwise)  
+- $Risk_v$ = Treatment indicator (e.g., opium risk, terrain-based risk)  
+- $X_{vdt}$ = Vector of optional control variables  
+- $\mu_d$ = District or province fixed effects  
+- $\lambda_t$ = Year trend  
+- $\varepsilon_{vdt}$ = Error term clustered at the village level  
+
+The coefficient of interest is **β**, which captures the differential post-ORP change in the outcome for risk villages relative to non-risk villages.
+
+
+```{r}
+# Prepare regression dataset
+library(dplyr)
+library(tidyr)
+library(fixest)
+
+# STEP 1: Gather population into long panel
+panel_df <- matched_0515 %>%
+  pivot_longer(cols = starts_with("pop_"), 
+               names_to = "year", 
+               names_prefix = "pop_",
+               values_to = "population") %>%
+  mutate(
+    year = as.integer(year),
+    log_pop = log1p(population),  # Use log1p in case of zeros
+    post = if_else(year >= 2006, 1, 0),
+    treated = if_else(risk_binary == "Risk", 1, 0),
+    treated_topo = if_else(risk_topo == "Risk Area", 1, 0),
+    did = post * treated
+  )
+```
+
+```{r}
+#| eval: false
+#| include: false
+# STEP 2: DiD regression with district and year fixed effects
+library(fixest)
+library(knitr)
+library(broom)
+
+# Model 1: Basic DiD with post * treated
+model1 <- feols(population ~ post * treated, data = panel_df, cluster = ~VCODE)
+
+# Model 2: Add year trend
+model2 <- feols(population ~ post * treated + year, data = panel_df, cluster = ~VCODE)
+
+# Model 3: Add district fixed effects
+model3 <- feols(population ~ post * treated + year | DCODE, data = panel_df, cluster = ~VCODE)
+
+# Model 4: Replace district with province fixed effects
+model4 <- feols(population ~ post * treated + year | PCODE, data = panel_df, cluster = ~VCODE)
+
+# Collect summaries
+model_list <- list(
+  "No FE" = model1,
+  "+ Year Trend" = model2,
+  "+ District FE" = model3,
+  "+ Province FE" = model4
+)
+
+etable(model_list, cluster = "VCODE", se.below = TRUE)
+
+
+```
+
+```{r}
+#| include: false
+library(fixest)
+library(knitr)
+library(broom)
+
+run_did_models <- function(dep_vars, indep_vars, panel_df, controls = NULL) {
+  
+  results <- list()
+  
+  # Loop over dependent variables
+  for (dep in dep_vars) {
+    
+    for (indep in indep_vars) {
+      
+      # Interaction term
+      formula_base <- paste0(dep, " ~ post * ", indep)
+      
+      # Add controls if provided
+      if (!is.null(controls) && length(controls) > 0) {
+        formula_base <- paste0(formula_base, " + ", paste(controls, collapse = " + "))
+      }
+      
+      # Define model formulas
+      f1 <- as.formula(formula_base)                                      # No FE
+      f2 <- as.formula(paste0(formula_base, " + year"))                   # + Year Trend
+      f3 <- as.formula(paste0(formula_base, " + year | DCODE"))           # + District FE
+      f4 <- as.formula(paste0(formula_base, " + year | PCODE"))           # + Province FE
+      
+      # Estimate models
+      model1 <- feols(f1, data = panel_df, cluster = ~VCODE)
+      model2 <- feols(f2, data = panel_df, cluster = ~VCODE)
+      model3 <- feols(f3, data = panel_df, cluster = ~VCODE)
+      model4 <- feols(f4, data = panel_df, cluster = ~VCODE)
+      
+      # Store in results list
+      results[[paste(dep, indep, sep = "_")]] <- list(
+        models = list(
+          "No FE"         = model1,
+          "+ Year Trend"  = model2,
+          "+ District FE" = model3,
+          "+ Province FE" = model4
+        )
+      )
+    }
+  }
+  
+  return(results)
+}
+
+```
+
+```{r}
+#| echo: false
+# Define variables
+dep_vars <- c("population", "log_pop")
+indep_vars <- c("risk_level", "risk_level_topo", "risk_binary", "risk_binary_topo")
+
+# Optional control variables
+controls <- c()  # <-- Placeholder, can be NULL if none
+
+# Run the function
+did_results <- run_did_models(dep_vars, indep_vars, panel_df, controls)
+
+```
+
+```{r}
+#| echo: false
+# Show one set of models (example: population ~ risk_level)
+etable(did_results[["population_risk_level"]]$models, cluster = "VCODE", se.below = TRUE)
+```
+
+1. Population ~ Risk Level
+
+- Post effect (ORP average effect): Strongly positive without controls (100.5) but disappears after adding year trends and fixed effects.
+➜ Suggests the initial raw increase in population is largely explained by time trends and regional fixed effects, not by the ORP itself.
+
+- Risk level effect: Negative in all models but loses magnitude once fixed effects are added, meaning that a large part of the baseline difference between high-risk and low-risk villages is captured by district/province unobserved factors.
+
+- Post × risk interaction: Remains large and highly significant (–54.89) across all specifications.
+➜ ORP period is associated with slower population growth in high-risk villages relative to non-risk villages, even after controlling for time, district, and province effects.
+
+- R²: Increases sharply with fixed effects (from 0.0388 to 0.190 for district FE), showing better model fit.
+
+
+```{r}
+#| echo: false
+# Show one set of models (example: population ~ risk_binary)
+etable(did_results[["population_risk_binary"]]$models, cluster = "VCODE", se.below = TRUE)
+```
+
+2. Population ~ Risk Binary
+
+- Post (ORP average effect): Positive and large (107.0) without controls. Shrinks to 9.14 after controlling for year trend or FE → most of the raw increase is explained by general population growth, not ORP-specific effects.
+
+- Risk binary: Large negative difference (–142.9) at baseline, meaning risk villages are initially much smaller. Becomes statistically insignificant after adding district/province FE, implying that local fixed effects already capture baseline differences between risk and non-risk villages.
+
+- Post × risk_binary (DiD estimate): Remains –42.58*** across all specifications → ORP period is associated with slower population growth in risk villages relative to non-risk villages, regardless of controls. This robustness strengthens the causal interpretation.
+
+- R² and Within R²: R² rises with fixed effects (0.0388 → 0.189), but the within R² is low (≈0.015), meaning most variation is cross-sectional rather than within-village over time.
+
+```{r}
+#| echo: false
+# Show one set of models (example: log(population) ~ risk_level)
+etable(did_results[["log_pop_risk_level"]]$models, cluster = "VCODE", se.below = TRUE)
+```
+
+3. Population ~ Risk Level (Topo)
+
+- Post (ORP average effect): Without controls: 0.1563 → about 15.6% increase in population. With year trend/FE: drops to 0.0075 (~0.75% increase), indicating that most of the initial effect was due to general time trends, not ORP-specific changes.
+
+- Risk level (continuous): Strong negative baseline relationship (–0.36) without FE: high-risk villages have much lower initial populations. Becomes insignificant with FE → these baseline differences are absorbed by district or province effects.
+
+- Post × risk level (DiD term): –0.0151* across all specifications → after ORP, high-risk villages grew 1.5% slower than low-risk villages. The effect is statistically significant but modest in magnitude.
+
+- Year trend: 0.0142*** → about 1.4% annual growth rate across all villages, controlling for FE.
+
+- R² and Within R²: R² rises from 0.033 to 0.214 with district FE, but within R² remains small (~0.015), meaning that most variation is explained by cross-sectional differences rather than within-village changes.
+
+
+```{r}
+#| echo: false
+# Show one set of models (example: log(population) ~ risk_level)
+etable(did_results[["log_pop_risk_binary"]]$models, cluster = "VCODE", se.below = TRUE)
+```
+
+4. Population ~ Risk Binary (Topo)
+
+- Post (ORP average effect): No FE: 0.1643 → ≈ 16.4% population increase. With year trend/FE: 0.0155 → ≈ 1.6% increase, suggesting that most of the raw growth is due to general time trends.
+
+- Risk (baseline difference): Strongly negative without FE (–0.21) → risk villages were ≈ 21% smaller pre-ORP. Becomes small or insignificant after FE → district or province characteristics absorb much of this baseline gap.
+
+- Post × risk (DiD effect): 
+Stable at –0.0242*** → high-risk villages grew ~2.4% slower than non-risk villages post-ORP. Effect size is larger (more negative) than in the continuous risk model (–0.0151), implying sharper divergence when using a binary risk split.
+
+- Year trend: 0.0142*** → ≈ 1.4% annual growth rate across villages.
+
+- R² and Within R²: R² improves with FE (0.029 → 0.215), while within R² (~0.016) remains low, showing that most variation is cross-sectional.
+
+```{r}
+#| echo: false
+# Show one set of models (example: population ~ risk_level_topo)
+etable(did_results[["population_risk_level_topo"]]$models, cluster = "VCODE", se.below = TRUE)
+```
+
+5. Log(Population) ~ Risk Level
+
+- Post (ORP average effect): No FE: 114.4 → large raw increase. With controls: 16.62 → this is the estimated overall post-ORP population growth after removing time and location effects.
+
+- Risk_level_topo (baseline difference): Strongly negative (–282.3) without FE. Still large (–100 to –118) even with FE, indicating that villages in high-risk topographic areas remain substantially smaller even after controlling for district or province factors. This is stronger than for risk-only models, suggesting topography explains additional baseline differences.
+
+- Post × risk_level_topo (DiD effect): –72.05*** across all models → high-risk topographic villages grew much slower in absolute terms than other villages post-ORP. This is the largest negative DiD effect compared to specifications above.
+
+- R² and Within R²: R² improves with FE (0.062 → 0.195). Within R² (0.022 for district FE) is higher than in previous models (~0.015), meaning this specification explains more within-village variation.
+
+```{r}
+#| echo: false
+# Show one set of models (example: population ~ risk_binary_topo)
+etable(did_results[["population_risk_binary_topo"]]$models, cluster = "VCODE", se.below = TRUE)
+```
+
+6. Log(Population) ~ Risk Binary
+
+- Post (ORP average effect): Large and positive without FE (95.68). Becomes insignificant (–2.15) after adding year trend and FE → population growth is explained by general time trends, not ORP.
+
+- Risk_binary_topo (baseline difference): Large baseline gap (–137.1) between risk and non-risk villages initially. Becomes insignificant after adding FE, indicating these differences are explained by district/province characteristics.
+
+- Post × risk_binary_topo (DiD effect): Remains –29.99* across all models → risk villages with unfavorable topography experienced significantly slower population growth compared to non-risk villages. Although the magnitude is smaller than the continuous topography risk model (–72.05), it is still substantial and robust.
+
+- Year trend: 9.317*** → captures the general upward population trend independent of risk or ORP.
+
+- R² and Within R²: R² rises from 0.030 to 0.189 with district FE. Within R² (0.015) is consistent with other binary risk specifications.
+
+```{r}
+#| echo: false
+# Show one set of models (example: log(population) ~ risk_level_topo)
+etable(did_results[["log_pop_risk_level_topo"]]$models, cluster = "VCODE", se.below = TRUE)
+```
+
+7. Log(Population) ~ Risk Level (Topo)
+
+- Post (ORP average effect): No FE: 0.1624 → ≈ 16.2% population growth. With FE: 0.0135 → ≈ 1.35% growth, suggesting most raw growth comes from general time trends.
+
+- Risk_level_topo (baseline difference): Strong negative baseline relationship (–0.4459) without FE → high-risk villages are ≈ 44% smaller. After FE: effect remains negative and significant (–0.096 to –0.108), showing topography explains persistent population differences beyond district or province averages.
+
+- Post × risk_level_topo (DiD effect): –0.0253** → high-risk topographic villages grew ≈ 2.5% slower post-ORP. Stronger magnitude than non-topographic risk (–1.5%), confirming that terrain intensifies ORP’s uneven impact.
+
+- Year trend: 0.0142*** → ≈ 1.4% annual growth rate across villages.
+
+- R² and Within R²: R² improves substantially with FE (0.049 → 0.216). Within R² (≈0.018) is higher than for non-topographic risk, indicating this model better explains within-village changes.
+
+```{r}
+#| echo: false
+# Show one set of models (example: log(population) ~ risk_binary_topo)
+etable(did_results[["log_pop_risk_binary_topo"]]$models, cluster = "VCODE", se.below = TRUE)
+```
+
+8. Log(Population) ~ Risk Binary (Topo)
+
+- Post (ORP average effect): No FE: 0.1534 → ≈ 15.3% growth. With FE: 0.0045 → ≈ 0.45% growth, most of the initial growth is explained by time trends.
+
+- Risk_binary_topo (baseline difference): Negative without FE (–0.2273 → risk villages ≈ 22.7% smaller). Becomes insignificant after FE → baseline differences absorbed by district/province fixed effects.
+
+- Post × risk_binary_topo (DiD effect): Small and not statistically significant across all models. Indicates no clear differential growth effect between risk and non-risk villages in this binary-topo specification (unlike the continuous topo risk model, which showed –0.0253**).
+
+- Year trend: 0.0142*** → ≈ 1.4% annual growth rate for all villages.
+
+- R² and Within R²: R² improves with FE (0.028 → 0.214), but within R² remains low (~0.016), consistent with other models.
+
+
+### Summary 
+
+```{r}
+#| echo: false
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+
+# Create data frame
+did_df <- tibble(
+  Model = c(
+    "Population (Risk Cont.)",
+    "Population (Risk Binary)",
+    "Population (Risk Topo)",
+    "Population (Risk Binary Topo)",
+    "Log Population (Risk Cont.)",
+    "Log Population (Risk Binary)",
+    "Log Population (Risk Topo)",
+    "Log Population (Risk Binary Topo)"
+  ),
+  DiD_Estimate = c(-54.89, -42.58, -72.05, -29.99, -0.0151, -0.0242, -0.0253, -0.0034),
+  SE = c(5.79, 4.67, 7.17, 4.21, 0.0071, 0.0055, 0.0078, 0.0049)
+) %>%
+  mutate(
+    CI_lower = DiD_Estimate - 1.96 * SE,
+    CI_upper = DiD_Estimate + 1.96 * SE,
+    Type = ifelse(str_detect(Model, "Log Population"), "Log Population", "Population")
+  )
+
+# Separate Population table
+did_population <- did_df %>% 
+  filter(Type == "Population") %>%
+  select(Model, DiD_Estimate, SE, CI_lower, CI_upper)
+
+kable(did_population, "html", digits = 3, caption = "Difference-in-Differences: Population Models") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed"))
+
+# Separate Log Population table
+did_log <- did_df %>%
+  filter(Type == "Log Population") %>%
+  select(Model, DiD_Estimate, SE, CI_lower, CI_upper)
+
+kable(did_log, "html", digits = 3, caption = "Difference-in-Differences: Log Population Models") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed"))
+
+
+```
+
+```{r}
+#| echo: false
+# ---- Plot 1: Population models ----
+did_df %>%
+  filter(Type == "Population") %>%
+  ggplot(aes(x = DiD_Estimate, y = fct_rev(Model))) +
+  geom_point(color = "blue", size = 3) +
+  geom_errorbarh(aes(xmin = CI_lower, xmax = CI_upper), height = 0.2, color = "blue") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  labs(
+    title = "Difference-in-Differences Estimates (Population Models)",
+    x = "DiD Estimate (Effect Size)",
+    y = NULL
+  ) +
+  theme_bw()
+
+# ---- Plot 2: Log Population models ----
+did_df %>%
+  filter(Type == "Log Population") %>%
+  ggplot(aes(x = DiD_Estimate, y = fct_rev(Model))) +
+  geom_point(color = "darkred", size = 3) +
+  geom_errorbarh(aes(xmin = CI_lower, xmax = CI_upper), height = 0.2, color = "darkred") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  labs(
+    title = "Difference-in-Differences Estimates (Log Population Models)",
+    x = "DiD Estimate (Effect Size)",
+    y = NULL
+  ) +
+  theme_bw()
+```
+
+We estimate the impact of China’s Opium Replacement Program (ORP) on village-level population using four alternative risk definitions: continuous risk, binary risk, continuous topography-adjusted risk, and binary topography-adjusted risk, each in both levels and logarithmic forms.
+
+1. Population (Level) Models
+
+- Continuous risk: The DiD effect is –54.9 (p<0.001), indicating that high-risk villages experienced significantly slower population growth in absolute terms.
+
+- Binary risk: The effect decreases to –42.6 (p<0.001), showing a similar but slightly smaller gap between risk and non-risk villages.
+
+- Topography-adjusted risk: The effect strengthens to –72.1 (p<0.001), suggesting that terrain (elevation and slope) sharpens the divergence in population growth.
+
+- Binary topography-adjusted risk: The effect is –29.99 (p<0.001), still negative but substantially smaller, implying that binary classification loses some variation.
+
+
+2. Log Population Models
+
+- Continuous risk: The DiD estimate is –0.0151 (p<0.05), or ~1.5% slower growth in high-risk villages.
+
+- Binary risk: The effect increases to –0.0242 (p<0.001) (~2.4% slower growth), showing a more pronounced relative gap.
+
+- Topography-adjusted risk: The effect is –0.0253 (p<0.01) (~2.5% slower growth), the strongest and most robust percentage-based result.
+
+- Binary topography-adjusted risk: The effect becomes –0.0034 (ns), statistically insignificant, suggesting that binary grouping oversimplifies risk variation.
+
+Consistent negative DiD effects across most specifications confirm that ORP villages—especially those with higher opium risk and challenging topography—experienced slower population growth relative to non-risk villages. Incorporating elevation and slope strengthens the estimated negative effect, especially in continuous-risk models. The binary topographic risk model becomes insignificant in the log specification, highlighting the importance of continuous measures.
+
+
+# ORP and Topographic Conditions
+
+We want to characterize location where ORP is likely to be established using topographic condition rather than using ORP records directly since there might be endogeneity issue. That is, ORP alternative crop plantation might be established where labor force is abundant while population might also react if the ORP alternative crop plantation is established nearby.
+
+In previous section, we pointed out that topographic conditions might have different population distribution and population dynamics (population growth). In this section, we further classify the topographic condition that is more likely to attract ORP alternative crop plantation.
+
+Since the topographic conditions might determine the baseline population distribution and the population dynamic across years, we anticipate that ORP might also have differential impact on different elevation-slope group. In this section, we evaluate the following:
+
+1.  Controlling for topographic conditions, do provinces and districts that have ORP nearby experience different population growth compared to those without any ORP program nearby?
+2.  Controlling for topographic conditions, do provinces and districts that have more ORP program/higher ORP intensity experience different population growth compared to those that have less ORP program/lower ORP intensity?
+3.  Controlling for topographic conditions, do villages with opium cultivation risk experience different population growth compared to those with no opium cultivation risk?
+4.  Controlling for topographic conditions, do villages with higher opium cultivation risk experience different population growth compared to those with lower opium cultivation risk?
+5.  Controlling for topographic conditions, do provinces and districts with ORP program nearby and opium cultivation risk experience different population growth compared to those that have no ORP program nearby and no opium cultivation risk.
+6.  Controlling for topographic conditions, do provinces and districts with more ORP program/higher ORP intensity and higher opium cultivation risk experience different population growth compared to those with less ORP program/lower ORP intensity and with lower opium cultivation risk.
+
+## Elevation-Slope Group
+
+From above observation, we've seen that low-low elevation-slope class tend to have higher population compared to high-high and other elevation-slope class. In this section, we'll look further into the population distribution and dynamics by comparing different elevation-slope class.
+
+```{r}
+#| echo: false
+# National level population distribution in low-low and high-high elevation-slope group
+national_level_elev_slope_group_2005 <- v_2005 %>% 
+  st_drop_geometry() %>% 
+  group_by(elevation_slope_group) %>% 
+  summarize(n_village = n(), 
+            n_population = sum(population), 
+            mean_population = mean(population), 
+            sd_population = sd(population))
+
+national_level_elev_slope_group_2015 <- v_2015 %>% 
+  st_drop_geometry() %>% 
+  group_by(elevation_slope_group) %>% 
+  summarize(n_village = n(), 
+            n_population = sum(population), 
+            mean_population = mean(population), 
+            sd_population = sd(population))
+
+national_level_elev_slope_group_2005 %>%
+  kable(
+    format = "html",  
+    caption = "Summary Statistics of Population by Elevation-Slope Group (Census) in 2005",
+    align = "c"
+  )
+national_level_elev_slope_group_2015 %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Summary Statistics of Population by Elevation-Slope Group (Census) in 2015",
+    align = "c"
+  )
+```
+
+From the table above we can see low-low elevation-slope class has higher mean village population followed by high-low, low-high, and high-high class. We can also observe the mean village population difference between high-high and low-low elevation-slope class is 283 in 2005 and the gap increased into 418 in 2015.
+
+```{r}
+#| echo: false
+# Determine shared axis limits
+x_lim <- c(0, 3000)  # adjust as needed
+y_lim <- c(0, 0.003)  # fine-tuned from inspecting densities
+
+# Plot for 2005
+p1 <- ggplot(v_2005, aes(x = population, fill = elevation_slope_group)) +
+  geom_density(alpha = 0.5) +
+  scale_x_continuous(limits = x_lim) +
+  scale_y_continuous(limits = y_lim) +
+  labs(
+    title = "Population by Elevation-Slope Group (2005)",
+    x = "Village Population",
+    y = "Density",
+    fill = "Elevation-Slope Group"
+  ) +
+  theme_bw()
+
+# Plot for 2015
+p2 <- ggplot(v_2015, aes(x = population, fill = elevation_slope_group)) +
+  geom_density(alpha = 0.5) +
+  scale_x_continuous(limits = x_lim) +
+  scale_y_continuous(limits = y_lim) +
+  labs(
+    title = "Population by Elevation-Slope Group (2015)",
+    x = "Village Population",
+    y = "Density",
+    fill = "Elevation-Slope Group"
+  ) +
+  theme_bw()
+
+# Combine side by side
+p1 + p2 + plot_layout(guides = "collect") & theme(legend.position = "bottom")
+
+```
+
+```{r}
+# Shared y-axis limit
+y_lim <- c(0, 3000)
+
+# Boxplot for 2005
+p1 <- ggplot(v_2005,
+             aes(x = elevation_slope_group, y = population, fill = elevation_slope_group)) +
+  geom_boxplot(outlier.alpha = 0.2, width = 0.5) +
+  scale_y_continuous(limits = y_lim) +
+  labs(
+    title = "Population by Elevation-Slope Group (2005)",
+    x = NULL,
+    y = "Village Population",
+    fill = "Elevation-Slope Group"
+  ) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+# Boxplot for 2015
+p2 <- ggplot(v_2015,
+             aes(x = elevation_slope_group, y = population, fill = elevation_slope_group)) +
+  geom_boxplot(outlier.alpha = 0.2, width = 0.5) +
+  scale_y_continuous(limits = y_lim) +
+  labs(
+    title = "Population by Elevation-Slope Group (2015)",
+    x = NULL,
+    y = "Village Population",
+    fill = "Elevation-Slope Group"
+  ) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+# Combine plots side-by-side
+p1 + p2 + plot_layout(guides = "collect") & theme(legend.position = "bottom")
+```
+
+## ORP Programs
+
+```{r}
+#| include: false
+user <- 2
+working_dirs <- c(
+  "Your coauthor's path",           
+  "D:/AppliedEconomics/Opium_Substitution/Empirical/build"
+)
+setwd(working_dirs[user])
+# Incorporate ORP map
+prov_orp <- readRDS("temp/n_project_by_province.rds")
+dist_orp <- readRDS("temp/n_project_by_district.rds")
+
+# Province-level join
+v_2005_proj <- st_join(v_2005, prov_orp %>% select(pname, prov_proj = count))
+v_2015_proj <- st_join(v_2015, prov_orp %>% select(pname, prov_proj = count))
+
+# District-level join
+v_2005_proj <- st_join(v_2005_proj, dist_orp %>% select(dname, dist_proj = count))
+v_2015_proj <- st_join(v_2015_proj, dist_orp %>% select(dname, dist_proj = count))
+
+```
+
+```{r}
+#| echo: false
+# Explore Relationships by province
+province_orp_population_2005 <- v_2005_proj %>%
+  st_drop_geometry() %>%
+  group_by(PCODE, PNAME) %>%
+  summarize(
+    total_pop = sum(population, na.rm = TRUE), 
+    mean_pop = mean(population, na.rm = TRUE),
+    n_prov_proj = first(prov_proj)
+  )
+
+province_orp_population_2005 %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Province Level ORP program and Population (2005)",
+    align = "c"
+  )
+
+province_orp_population_2015 <- v_2015_proj %>%
+  st_drop_geometry() %>%
+  group_by(PCODE, PNAME) %>%
+  summarize(
+    total_pop = sum(population, na.rm = TRUE), 
+    mean_pop = mean(population, na.rm = TRUE),
+    n_prov_proj = first(prov_proj)
+  )
+
+province_orp_population_2015 %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Province Level ORP program and Population (2015)",
+    align = "c"
+  )
+```
+
+```{r}
+#| echo: false
+# Function to compute stats for each province
+compare_means_by_province <- function(pcode) {
+  # Filter for that province
+  data_2005 <- v_2005_proj %>% filter(PCODE == pcode) %>% st_drop_geometry()
+  data_2015 <- v_2015_proj %>% filter(PCODE == pcode) %>% st_drop_geometry()
+  
+  # Run Welch's t-test
+  t_result <- t.test(data_2015$population, data_2005$population)
+  
+  # Return summary
+  tibble(
+    PCODE = pcode,
+    PNAME = first(data_2005$PNAME),
+    mean_pop_2005 = mean(data_2005$population, na.rm = TRUE),
+    mean_pop_2015 = mean(data_2015$population, na.rm = TRUE),
+    diff_mean_pop = mean_pop_2015 - mean_pop_2005,
+    p_value = t_result$p.value,
+    n_prov_proj = first(data_2005$prov_proj)
+  )
+}
+
+# Run for each province
+province_results <- map_dfr(unique(v_2005_proj$PCODE), compare_means_by_province)
+
+# Fill NA value 
+province_results <- province_results %>%
+  mutate(n_prov_proj = if_else(is.na(n_prov_proj), 0L, n_prov_proj))
+
+# View results
+province_results %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Province Level ORP program and Population (2005 ~ 2015)",
+    align = "c"
+  )
+```
+
+```{r}
+#| echo: false
+# Visualization
+temp1 <- province_results %>% 
+  filter(n_prov_proj > 0)
+
+ggplot(province_results, aes(x = n_prov_proj, y = diff_mean_pop)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue", linewidth = 0.8) +
+  labs(
+    title = "Correlation Between Project Count and Change in Mean Population",
+    x = "Number of Projects in Province",
+    y = "Change in Mean Population (2005–2015)"
+  ) + 
+  theme_bw()
+
+ggplot(temp1, aes(x = n_prov_proj, y = diff_mean_pop)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue", linewidth = 0.8) +
+  labs(
+    title = "Correlation Between Project Count and Change in Mean Population",
+    x = "Number of Projects in Province",
+    y = "Change in Mean Population (2005–2015)"
+  ) + 
+  theme_bw()
+```
+
+```{r}
+#| echo: false
+# Explore Relationships
+district_orp_population_2005 <- v_2005_proj %>%
+  st_drop_geometry() %>%
+  group_by(DCODE, DNAME) %>%
+  summarize(
+    total_pop = sum(population, na.rm = TRUE), 
+    mean_pop = mean(population, na.rm = TRUE),
+    n_dist_proj = first(dist_proj)
+  )
+
+district_orp_population_2005 %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "District Level ORP program and Population (2005)",
+    align = "c"
+  )
+
+district_orp_population_2015 <- v_2015_proj %>%
+  st_drop_geometry() %>%
+  group_by(DCODE, DNAME) %>%
+  summarize(
+    total_pop = sum(population, na.rm = TRUE), 
+    mean_pop = mean(population, na.rm = TRUE),
+    n_dist_proj = first(dist_proj)
+  )
+
+district_orp_population_2015 %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "District Level ORP program and Population (2015)",
+    align = "c"
+  )
+
+```
+
+```{r}
+#| echo: false
+compare_means_by_district <- function(dcode) {
+  # Filter for that district
+  data_2005 <- v_2005_proj %>% filter(DCODE == dcode) %>% st_drop_geometry()
+  data_2015 <- v_2015_proj %>% filter(DCODE == dcode) %>% st_drop_geometry()
+  
+  # Check for sufficient data
+  if (nrow(data_2005) < 2 || nrow(data_2015) < 2) {
+    return(tibble(
+      DCODE = dcode,
+      DNAME = ifelse(nrow(data_2005) > 0, first(data_2005$DNAME), NA_character_),
+      mean_pop_2005 = ifelse(nrow(data_2005) > 0, mean(data_2005$population, na.rm = TRUE), NA_real_),
+      mean_pop_2015 = ifelse(nrow(data_2015) > 0, mean(data_2015$population, na.rm = TRUE), NA_real_),
+      diff_mean_pop = NA_real_,
+      p_value = NA_real_,
+      n_dist_proj = ifelse(nrow(data_2005) > 0 && !is.na(first(data_2005$dist_proj)), first(data_2005$dist_proj), 0L)
+    ))
+  }
+  
+  # Run Welch's t-test
+  t_result <- t.test(data_2015$population, data_2005$population)
+  
+  # Return summary
+  tibble(
+    DCODE = dcode,
+    DNAME = first(data_2005$DNAME),
+    mean_pop_2005 = mean(data_2005$population, na.rm = TRUE),
+    mean_pop_2015 = mean(data_2015$population, na.rm = TRUE),
+    diff_mean_pop = mean(data_2015$population, na.rm = TRUE) - mean(data_2005$population, na.rm = TRUE),
+    p_value = t_result$p.value,
+    n_dist_proj = ifelse(is.na(first(data_2005$dist_proj)), 0L, first(data_2005$dist_proj))
+  )
+}
+
+# Run for each province
+district_results <- map_dfr(unique(v_2005_proj$DCODE), compare_means_by_district)
+
+# Fill NA value 
+district_results <- district_results %>%
+  mutate(n_dist_proj = if_else(is.na(n_dist_proj), 0L, n_dist_proj))
+
+# View results
+district_results %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "District Level ORP program and Population (2005 ~ 2015)",
+    align = "c"
+  )
+```
+
+```{r}
+#| echo: false
+# Visualization
+temp <- district_results %>% 
+  filter(n_dist_proj > 0)
+
+ggplot(district_results, aes(x = n_dist_proj, y = diff_mean_pop)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue", linewidth = 0.8) +
+  labs(
+    title = "Correlation Between Project Count and Change in Mean Population",
+    x = "Number of Projects in District",
+    y = "Change in Mean Population (2005–2015)"
+  ) + 
+  theme_bw()
+
+ggplot(temp, aes(x = n_dist_proj, y = diff_mean_pop)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = TRUE, color = "blue", linewidth = 0.8) +
+  labs(
+    title = "Correlation Between Project Count and Change in Mean Population",
+    x = "Number of Projects in District",
+    y = "Change in Mean Population (2005–2015)"
+  ) + 
+  theme_bw()
+```
+
+因为要同时考虑elevation-slope class、人口、省\\区级罂粟替代种植项目的数量三个维度的信息，可能用一张表不能够很好的体现。
+
+## ORP and Elevation-Slope
+
+# Opium Cultivation
+
+```{r}
+user <- 2
+working_dirs <- c(
+  "Your coauthor's path",           
+  "D:/AppliedEconomics/Opium_Substitution/Empirical/build"
+)
+setwd(working_dirs[user])
+
+risk_2005 <- readRDS("temp/risk_2005.rds") %>% 
+  mutate(VCODE = if_else(nchar(VCODE) == 6, paste0("0", VCODE), as.character(VCODE))) %>% 
+  mutate(risk = factor(if_else(op2000_count > 0, "Cultivation Observed", "No Cultivation"))) %>% 
+  select(VCODE, risk)
+
+risk_2015 <- readRDS("temp/risk_2015.rds") %>% 
+  mutate(VCODE = if_else(nchar(VCODE) == 6, paste0("0", VCODE), as.character(VCODE))) %>% 
+  mutate(risk = factor(if_else(op2000_count > 0, "Cultivation Observed", "No Cultivation"))) %>% 
+  select(VCODE, risk)
+
+v_2005_risk <- v_2005 %>% 
+  left_join(risk_2005, by = "VCODE")
+
+v_2015_risk <- v_2015 %>% 
+  left_join(risk_2015, by = "VCODE")
+```
+
+## 
+
+# WorldPop
+
+```{r}
+#| include: false
+user <- 2
+working_dirs <- c(
+  "Your coauthor's path",           
+  "D:/AppliedEconomics/Opium_Substitution/Empirical/build"
+)
+setwd(working_dirs[user])
+
+# WorldPop time series (2005 boundary)
+wp_2005 <- readRDS("temp/worldpop_village_2005.rds") %>% 
+  select(VCODE, starts_with("pop_")) %>% 
+  mutate(VCODE = if_else(nchar(VCODE) == 6, paste0("0", VCODE), as.character(VCODE)))
+
+# Worldpop time series (2015 boundary)
+wp_2015 <- readRDS("temp/worldpop_village_2015.rds") %>% 
+  select(VCODE, starts_with("pop_")) %>% 
+  mutate(VCODE = if_else(nchar(VCODE) == 6, paste0("0", VCODE), as.character(VCODE)))
+
+# phc_05
+phc_05 <- readRDS("temp/phc_2005.rds") %>%
+  mutate(area_km2 = as.numeric(st_area(geometry)) / 1e6) %>% 
+  left_join(wp_2005, by = "VCODE") %>% 
+  mutate(dens_2005 = pop_2005 / area_km2, 
+         dens_2015 = pop_2015 / area_km2, 
+         c_dens = dens_2015 - dens_2005)
+
+# phc_15
+phc_15 <- readRDS("temp/phc_2015.rds") %>%
+  mutate(area_km2 = as.numeric(st_area(geometry)) / 1e6) %>% 
+  left_join(wp_2015, by = "VCODE") %>% 
+  mutate(dens_2005 = pop_2005 / area_km2, 
+         dens_2015 = pop_2015 / area_km2, 
+         c_dens = dens_2015 - dens_2005)
+
+# phc_0515
+phc_0515 <- readRDS("temp/phc_20052015.rds") %>% 
+  mutate(area_km2 = as.numeric(st_area(geometry)) / 1e6) %>% 
+  left_join(wp_2015, by = "VCODE") %>% 
+  mutate(dens_2005 = pop_2005 / area_km2, 
+         dens_2015 = pop_2015 / area_km2, 
+         c_dens = dens_2015 - dens_2005)
+
+# Match List
+final_match <- read_csv("temp/match_list.csv") %>% 
+  filter(str_sub(vcode_2005, 1, 2) %in% c("02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "18"))
+
+# Construct Merged Panel (2005/2015)
+# 1. Merge 2005 data with match list
+matched_05 <- final_match %>%
+  left_join(phc_05 %>% 
+              st_drop_geometry() %>% 
+              select(VCODE, population_2005 = population, 
+                     poverty_rate_2005 = poverty_rate, 
+                     area_km2_2005 = area_km2), 
+            by = c("vcode_2005" = "VCODE"))
+
+# 2. Merge 2015 data
+matched_0515 <- matched_05 %>%
+  left_join(phc_15 %>% 
+              st_drop_geometry() %>% 
+              select(VCODE, population_2015 = population, 
+                     poverty_rate_2015 = poverty_rate, 
+                     area_km2_2015 = area_km2), 
+            by = c("vcode_2015" = "VCODE"), 
+            suffix = c("_2005", "_2015"))
+
+# 3. Aggregate to 2015 villages
+merged_panel <- matched_0515 %>%
+  group_by(vcode_2015) %>%
+  summarise(
+    population_2005 = sum(population_2005, na.rm = TRUE),
+    poverty_rate_2005 = {
+      x <- poverty_rate_2005
+      w <- population_2005
+      mask <- !is.na(x) & !is.na(w)
+      if (sum(mask) > 0) weighted.mean(x[mask], w[mask]) else NA_real_
+    },
+    area_km2_2005 = sum(area_km2_2005, na.rm = TRUE),
+    population_2015 = first(population_2015),
+    poverty_rate_2015 = first(poverty_rate_2015),
+    area_km2_2015 = first(area_km2_2015)
+  ) %>%
+  mutate(
+    density_2005 = population_2005 / area_km2_2005,
+    density_2015 = population_2015 / area_km2_2015,
+    c_density = density_2015 - density_2005,
+    ld_density = log(density_2015) - log(density_2005), 
+    c_poverty = poverty_rate_2015 - poverty_rate_2005
+  ) %>%
+  ungroup()
+
+matched_0515 <- merged_panel %>% 
+  left_join(wp_2015, by = c("vcode_2015" = "VCODE")) %>% 
+  mutate(c_population = population_2015 - population_2005, 
+         c_pop = pop_2015 - pop_2005, 
+         ld_population = log(population_2015) - log(population_2005), 
+         ld_pop = log(pop_2015) - log(pop_2005), 
+         dens_2005 = pop_2005 / area_km2_2005, 
+         dens_2015 = pop_2015 / area_km2_2015, 
+         c_dens = dens_2015 - dens_2005, 
+         ld_dens = log(dens_2015) - log(dens_2005))
+
+# Select elevation and slope from v_2015 and join to matched_0515
+matched_0515 <- matched_0515 %>%
+  left_join(
+    v_2015 %>% 
+      st_drop_geometry() %>%
+      select(VCODE, mean_elev, mean_slope),
+    by = c("vcode_2015" = "VCODE")
+  ) %>%
+  mutate(
+    elevation = if_else(mean_elev > median(mean_elev, na.rm = TRUE), "High Elevation", "Low Elevation"),
+    slope     = if_else(mean_slope > median(mean_slope, na.rm = TRUE), "High Slope", "Low Slope"),
+    elevation_slope_group = case_when(
+      elevation == "High Elevation" & slope == "High Slope" ~ "High-High",
+      elevation == "High Elevation" & slope == "Low Slope"  ~ "High-Low",
+      elevation == "Low Elevation"  & slope == "High Slope" ~ "Low-High",
+      elevation == "Low Elevation"  & slope == "Low Slope"  ~ "Low-Low"
+    )
+  )
+
+# Create ld_dens_quantile
+matched_0515 <- matched_0515 %>%
+  mutate(ld_density_quantile = cut(
+    ld_density, 
+    breaks = quantile(ld_density, probs = seq(0, 1, 0.2), na.rm = TRUE), 
+    include.lowest = TRUE, 
+    labels = c("0–20%", "20–40%", "40–60%", "60–80%", "80–100%")
+  )) %>% 
+  mutate(ld_dens_quantile = cut(
+    ld_dens,
+    breaks = quantile(ld_dens, probs = seq(0, 1, 0.2), na.rm = TRUE),
+    include.lowest = TRUE,
+    labels = c("0–20%", "20–40%", "40–60%", "60–80%", "80–100%")
+  ))
+
+glimpse(matched_0515)
+```
+
+```{r}
+#| echo: false
+# Join quantile info to centroids
+v_centroids_2015 <- v_centroids %>%
+  left_join(
+    matched_0515 %>% select(vcode_2015, ld_dens_quantile, ld_density_quantile),
+    by = c("VCODE" = "vcode_2015")
+  )
+
+# Add geometry from v_2015
+matched_0515_sf <- matched_0515 %>%
+  left_join(
+    v_2015 %>% select(VCODE, geometry),
+    by = c("vcode_2015" = "VCODE")
+  ) %>%
+  st_as_sf()  # Convert back to sf object
+
+# Plot
+ggplot() + 
+  geom_sf(data = matched_0515_sf, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name = "Elev-Slope Group",
+    values = c("High-High" = "#EF3B2C", 
+               "High-Low" = "#FDAE61",
+               "Low-High" = "#66C2A5", 
+               "Low-Low" = "#2171B5")
+  ) +
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) +
+  geom_sf(
+    data = v_centroids_2015 %>% filter(ld_dens_quantile == "80–100%"),
+    color = "black", size = 0.4, alpha = 0.9
+  ) +
+  labs(
+    title = "Villages with Top 20% Log Density Change (2005–2015)",
+    subtitle = "Black dots indicate villages in top 80–100% of log population density change (WorldPop)"
+  ) +
+  theme_bw()
+```
+
+```{r}
+#| echo: false
+# Plot
+ggplot() + 
+  geom_sf(data = matched_0515_sf, aes(fill = elevation_slope_group), color = NA, alpha = 0.7) +
+  scale_fill_manual(
+    name = "Elev-Slope Group",
+    values = c("High-High" = "#EF3B2C", 
+               "High-Low" = "#FDAE61",
+               "Low-High" = "#66C2A5", 
+               "Low-Low" = "#2171B5")
+  ) +
+  geom_sf(data = masked_roads, color = "grey30", alpha = 0.7) +
+  geom_sf(
+    data = v_centroids_2015 %>% filter(ld_density_quantile == "80–100%"),
+    color = "black", size = 0.4, alpha = 0.9
+  ) +
+  labs(
+    title = "Villages with Top 20% Log Density Change (2005–2015)",
+    subtitle = "Black dots indicate villages in top 80–100% of log population density change (PHC Matched)"
+  ) +
+  theme_bw()
+```
+
+```{r}
+#| echo: false
+table_ld_dens_elevslope <- matched_0515 %>%
+  st_drop_geometry() %>% 
+  count(elevation_slope_group, ld_dens_quantile) %>%
+  tidyr::pivot_wider(
+    names_from = ld_dens_quantile,
+    values_from = n,
+    values_fill = 0
+  )
+
+table_ld_dens_elevslope %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Number of Villages by Elevation-Slope Group and Population Density Change Quantile (log difference, WorldPop)",
+    align = "c"
+  )
+```
+
+```{r}
+#| echo: false
+table_ld_density_elevslope <- matched_0515 %>%
+  st_drop_geometry() %>% 
+  count(elevation_slope_group, ld_density_quantile) %>%
+  tidyr::pivot_wider(
+    names_from = ld_density_quantile,
+    values_from = n,
+    values_fill = 0
+  )
+
+table_ld_density_elevslope %>%
+  kable(
+    format = "html",  # or "latex" if you're rendering PDF
+    caption = "Number of Villages by Elevation-Slope Group and Population Density Change Quantile (log difference, Matched PHC)",
+    align = "c"
+  )
+```
